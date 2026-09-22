@@ -1,0 +1,40 @@
+[build]
+  command = "pnpm build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+  PNPM_VERSION = "11.25.0"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/game"
+  to = "/.netlify/functions/game"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    X-Frame-Options = "DENY"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[dev]
+  command = "pnpm dev"
+  targetPort = 5173
+  port = 8888
+  framework = "vite"
