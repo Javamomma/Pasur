@@ -1,0 +1,6 @@
+vendor/
+components/ui/
+dist/
+node_modules/
+pnpm-lock.yaml
+.netlify/
