@@ -115,8 +115,12 @@ export function createGameHandler(rooms: RoomStore) {
         if (b.revision !== revision)
           throw new RequestError('The table changed. Please try again.', 409);
         if (b.action === 'start') {
-          if (seat !== 0) throw new RequestError('Only the host can deal.', 403);
+          if (g.phase === 'lobby' && seat !== 0)
+            throw new RequestError('Only the host can make the first deal.', 403);
+          const later = g.phase === 'round';
           gameAction(() => startRound(g));
+          if (later)
+            g.message = `${g.players[seat].name} dealt round ${g.round}. ${g.players[g.turn].name} starts.`;
         } else if (b.action === 'play') {
           if (
             typeof b.card !== 'string' ||
@@ -130,12 +134,13 @@ export function createGameHandler(rooms: RoomStore) {
         } else if (b.action === 'claim') {
           gameAction(() => claim(g, seat));
         } else if (b.action === 'rematch') {
-          if (seat !== 0 || g.phase !== 'finished')
-            throw new RequestError('The host can start a rematch after the game ends.', 403);
+          if (g.phase !== 'finished')
+            throw new RequestError('A rematch can start after the game ends.', 403);
           g.phase = 'lobby';
           g.scores = [0, 0];
           g.round = 0;
           gameAction(() => startRound(g));
+          g.message = `${g.players[seat].name} started a rematch. ${g.players[g.turn].name} starts.`;
         } else throw new RequestError('Unknown action.');
       }
       g.revision = revision + 1;

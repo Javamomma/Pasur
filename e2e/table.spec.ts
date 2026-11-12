@@ -1,29 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-
-const handLabels = (page: Page) =>
-  page
-    .locator('.hand-cards button.playing-card')
-    .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') || ''));
-
-async function playOneLegalCard(page: Page) {
-  const hand = page.locator('.hand-cards button.playing-card');
-  const pool = page.locator('[aria-label="Cards on the table"] button.playing-card');
-  const play = page.getByRole('button', { name: /^(Play card|Capture cards)$/ });
-  const n = await hand.count();
-  for (let i = 0; i < n; i++) {
-    await hand.nth(i).click();
-    if (await play.isEnabled()) return play.click();
-    // The card has capture options: try table-card combinations until the button enables.
-    const m = await pool.count();
-    for (let mask = 1; mask < 1 << m; mask++) {
-      const picked = [...Array(m).keys()].filter((k) => mask & (1 << k));
-      for (const k of picked) await pool.nth(k).click();
-      if (await play.isEnabled()) return play.click();
-      for (const k of picked) await pool.nth(k).click();
-    }
-  }
-  throw new Error('No legal play found');
-}
+import { test, expect } from '@playwright/test';
+import { handLabels, playOneLegalCard } from './helpers';
 
 test('two players: create, join, deal, play, reload', async ({ browser }) => {
   const hostCtx = await browser.newContext({ viewport: { width: 390, height: 664 } });

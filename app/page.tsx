@@ -101,6 +101,17 @@ export default function Home() {
         }),
       });
       const data = (await r.json()) as GameView & { error?: string };
+      if (r.status === 409 && (action === 'start' || action === 'rematch') && current.current) {
+        // Someone else already dealt: show the table as it is now, no error banner.
+        const fresh = await fetch('/api/game?code=' + encodeURIComponent(current.current.code), {
+          cache: 'no-store',
+        });
+        if (fresh.ok) {
+          const latest = (await fresh.json()) as GameView;
+          accept(latest);
+          return latest;
+        }
+      }
       if (!r.ok) throw Error(data.error || 'Please try again.');
       accept(data);
       setCard('');
@@ -734,14 +745,10 @@ export default function Home() {
                     </div>
                     <Button
                       className="primary-action"
-                      disabled={busy || game.seat !== 0}
+                      disabled={busy}
                       onClick={() => act(game.phase === 'finished' ? 'rematch' : 'start')}
                     >
-                      {game.seat !== 0
-                        ? 'Waiting for the host'
-                        : game.phase === 'finished'
-                          ? 'Play again'
-                          : 'Deal next round'}
+                      {game.phase === 'finished' ? 'Play again' : 'Deal next round'}
                     </Button>
                   </div>
                 )}
