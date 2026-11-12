@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
+    "verify": "pnpm test && pnpm build",
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "format": "prettier --write app lib server netlify tests main.tsx vite.config.ts",

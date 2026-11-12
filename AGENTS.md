@@ -25,10 +25,10 @@ pnpm dev         # Vite on 0.0.0.0:5173 (UI only)
 ## Verify
 
 ```sh
-pnpm test && pnpm build
+pnpm verify
 ```
 
-(Replaced by `pnpm verify` once that script exists.) Run it before every commit you hand back.
+Run it before every commit you hand back.
 The line `Pasur storage request failed. Error` in test output comes from an intentional
 failure test; it is not a failure.
 
