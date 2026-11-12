@@ -6,7 +6,9 @@ export interface RoomStore {
   save(game: Game, version: string): Promise<boolean>;
 }
 // Site-wide, strongly consistent reads. Each game is one atomic document.
-export function netlifyRoomStore(store = getStore({ name: 'pasur-rooms', consistency: 'strong' })): RoomStore {
+export function netlifyRoomStore(
+  store = getStore({ name: 'pasur-rooms', consistency: 'strong' }),
+): RoomStore {
   function modified(result: { modified: boolean; etag?: string }): boolean {
     // Fail closed if the provider does not confirm the stored version.
     if (result.modified && !result.etag) throw new Error('Storage did not confirm the write.');
