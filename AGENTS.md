@@ -20,6 +20,8 @@ pnpm install --frozen-lockfile
 pnpm test        # node --test on tests/*.test.ts (Node strips the types)
 pnpm build       # tsc --noEmit && vite build
 pnpm dev         # Vite on 0.0.0.0:5173 (UI only)
+pnpm table       # local two-browser table on http://127.0.0.1:5174 (real handler, in-memory store)
+pnpm e2e         # Playwright smoke test on its own server, port 5175 (not part of verify)
 ```
 
 ## Verify

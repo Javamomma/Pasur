@@ -24,7 +24,27 @@ pnpm build
 pnpm dev
 ```
 
-Use the local URL printed by Vite to preview the interface. Run multiplayer acceptance tests on a Netlify deploy preview or production deployment. The current Netlify Blobs local emulator omits ETags on reads; this app deliberately rejects missing versions instead of risking overwritten turns, so Netlify Dev multiplayer is not supported by this version.
+Use the local URL printed by Vite to preview the interface (no multiplayer: `pnpm dev` has no API).
+
+### Play a table locally
+
+```sh
+pnpm table
+```
+
+This serves the page at http://127.0.0.1:5174 (this machine only) together with the real `createGameHandler` on an in-memory store, so you can play a full two-player table without deploying. Open the URL in two different browsers, or one normal and one private window: each needs its own cookies, because a seat is a cookie.
+
+Dev-only routes on the same server (JSON):
+
+- `GET /__table/log`: one entry per `/api/game` request (`t, method, action, code, status, ms`); also appended to `.local-table/requests.log`.
+- `GET /__table/rooms`: each table's code, phase, round, revision and seats.
+- `POST /__table/hold {"ms": 8000, "count": 1, "action": "play"}`: hold the next replies for `ms` after the move is stored.
+- `POST /__table/unseat {"code": "…", "seat": 1}`: give that seat a new key (the browser loses its seat).
+- `POST /__table/delete {"code": "…"}`: remove the table.
+
+`pnpm e2e` runs the Playwright smoke test (two browser contexts: create, join, deal, play, reload). On a fresh machine run `pnpm exec playwright install chromium` once first. It starts its own table server on port 5175 (never reusing one on 5174), so it always tests this checkout.
+
+The memory table forgets everything when the server stops. It is dev-only code in `dev/` and is never part of the production build or the Netlify Function.
 
 ## Architecture
 

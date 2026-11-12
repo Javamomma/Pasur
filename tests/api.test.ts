@@ -1,27 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameHandler } from '../server/game-api.ts';
-import type { RoomStore } from '../server/rooms.ts';
+import { memoryRoomStore } from '../dev/memory-rooms.ts';
 import { options, type Game, type GameView } from '../lib/pasur.ts';
-function memoryRooms(): RoomStore {
-  const rows = new Map<string, { game: Game; version: string }>();
-  let serial = 0;
-  return {
-    async read(code) {
-      return structuredClone(rows.get(code) || null);
-    },
-    async create(game) {
-      if (rows.has(game.code)) return false;
-      rows.set(game.code, { game: structuredClone(game), version: String(++serial) });
-      return true;
-    },
-    async save(game, version) {
-      if (rows.get(game.code)?.version !== version) return false;
-      rows.set(game.code, { game: structuredClone(game), version: String(++serial) });
-      return true;
-    },
-  };
-}
 function client(handler: ReturnType<typeof createGameHandler>) {
   let cookie = '';
   return {
@@ -56,7 +37,7 @@ function client(handler: ReturnType<typeof createGameHandler>) {
 }
 for (const capacity of [2, 4])
   test(`${capacity}-player API round, permissions, privacy and reconnect`, async () => {
-    const handler = createGameHandler(memoryRooms());
+    const handler = createGameHandler(memoryRoomStore());
     const clients = Array.from({ length: capacity }, () => client(handler));
     let r = await clients[0].send({ action: 'create', name: 'Host', capacity });
     assert.equal(r.status, 200);
@@ -117,7 +98,7 @@ for (const capacity of [2, 4])
     assert.deepEqual(reconnect.data.scores, r.data.scores);
   });
 test('Concurrent joins cannot occupy the same seat or overwrite each other', async () => {
-  const store = memoryRooms();
+  const store = memoryRoomStore();
   let reads = 0;
   let release!: () => void;
   const barrier = new Promise<void>((r) => {
@@ -143,7 +124,7 @@ test('Concurrent joins cannot occupy the same seat or overwrite each other', asy
   assert.equal((await host.read(g.code)).data.players.length, 2);
 });
 test('CSRF, invalid input, unsupported methods and storage errors fail safely', async () => {
-  const h = createGameHandler(memoryRooms()),
+  const h = createGameHandler(memoryRoomStore()),
     c = client(h);
   assert.equal(
     (await c.send({ action: 'create', name: 'Host' }, 'https://evil.example')).status,
