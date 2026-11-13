@@ -124,3 +124,23 @@ test('a poll that asks to stop ends the schedule', async () => {
   assert.equal(polls, 1);
   p.stop();
 });
+
+test('acceptReply: an older reply never replaces a newer table', async () => {
+  const { acceptReply } = await import('../lib/connection.ts');
+  const t = (code: string, revision: number) => ({ code, revision });
+  let state: { code: string; revision: number } | null = null;
+  const deliver = (incoming: { code: string; revision: number }, switchTable = false) => {
+    if (acceptReply(state, incoming, { switchTable })) state = incoming;
+  };
+  deliver(t('AAAAAAAAAA', 5), true); // initial load
+  deliver(t('AAAAAAAAAA', 7));
+  deliver(t('AAAAAAAAAA', 6)); // late reply
+  assert.equal(state!.revision, 7);
+  deliver(t('AAAAAAAAAA', 7)); // same revision: nothing new
+  assert.equal(state!.revision, 7);
+  deliver(t('BBBBBBBBBB', 99)); // another table, not deliberate
+  assert.deepEqual(state, t('AAAAAAAAAA', 7));
+  deliver(t('BBBBBBBBBB', 1), true); // create / join / back-to-table
+  assert.deepEqual(state, t('BBBBBBBBBB', 1));
+  assert.equal(acceptReply(null, t('CCCCCCCCCC', 3), { switchTable: false }), true);
+});

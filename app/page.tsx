@@ -11,7 +11,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { createPoller } from '@/lib/connection';
+import { acceptReply, createPoller } from '@/lib/connection';
 import { label, rank, options, team, count, suitSymbols, type GameView } from '@/lib/pasur';
 import {
   Share2,
@@ -87,18 +87,21 @@ export default function Home() {
     return ++navGen.current;
   };
   const isLatest = (gen: number) => gen === navGen.current;
-  function accept(g: GameView) {
-    setGame(g);
+  // `switchTable` is true only for a deliberate navigation whose generation is still the latest.
+  function accept(g: GameView, switchTable = false) {
+    const ok = acceptReply(current.current, g, { switchTable });
+    setGame((old) => (acceptReply(old, g, { switchTable }) ? g : old));
+    if (!ok) return false;
     setCode(g.code);
     setScreen('table');
     localStorage.setItem('pasur-last-table', g.code);
     setLastCode(g.code);
     history.replaceState(null, '', '?table=' + g.code);
+    return true;
   }
   async function send(action: string, extra: Record<string, unknown> = {}) {
-    if (action === 'create' || action === 'join') {
-      beginNav();
-    }
+    const deliberate = action === 'create' || action === 'join';
+    const gen = deliberate ? beginNav() : navGen.current;
     setBusy(true);
     setError('');
     try {
@@ -125,12 +128,13 @@ export default function Home() {
         });
         if (fresh.ok) {
           const latest = (await fresh.json()) as GameView;
-          accept(latest);
+          if (isLatest(gen)) accept(latest);
           return latest;
         }
       }
       if (!r.ok) throw Error(data.error || 'Please try again.');
-      accept(data);
+      if (!isLatest(gen)) return data as GameView;
+      accept(data, deliberate);
       setCard('');
       setTake([]);
       localStorage.setItem('pasur-name', name);
@@ -158,7 +162,7 @@ export default function Home() {
         .then(async (r) => {
           if (!r.ok) return;
           const g = (await r.json()) as GameView;
-          if (isLatest(gen)) accept(g);
+          if (isLatest(gen)) accept(g, true);
         })
         .catch(() => {});
     }
@@ -177,7 +181,7 @@ export default function Home() {
           if (!r.ok) throw Error(d.error);
           if (!stopped) {
             setNotice('');
-            setGame((old) => (!old || d.revision > old.revision ? d : old));
+            setGame((old) => (acceptReply(old, d, { switchTable: false }) ? d : old));
           }
         } catch {
           if (!stopped) setNotice('Connection interrupted. Reconnecting…');
@@ -288,7 +292,7 @@ export default function Home() {
     if (!knownCode || restoring) return;
     setError('');
     if (game && game.code === knownCode) {
-      accept(game);
+      accept(game, true);
       return;
     }
     const gen = beginNav();
@@ -299,7 +303,7 @@ export default function Home() {
       });
       if (r.ok) {
         const g = (await r.json()) as GameView;
-        if (isLatest(gen)) accept(g);
+        if (isLatest(gen)) accept(g, true);
       } else if (r.status === 403 || r.status === 404) {
         const d = (await r.json().catch(() => ({}))) as { error?: string };
         if (isLatest(gen)) {

@@ -110,3 +110,19 @@ export function createPoller(o: {
     },
   };
 }
+
+type TableRef = { code: string; revision: number };
+
+/**
+ * The one rule for taking a server reply onto the screen. With no table yet, or a deliberate
+ * switch (create, join, first load, back to your table), accept. Otherwise only a newer
+ * revision of the same table.
+ */
+export function acceptReply(
+  current: TableRef | null | undefined,
+  incoming: TableRef,
+  opts: { switchTable: boolean },
+): boolean {
+  if (!current || opts.switchTable) return true;
+  return incoming.code === current.code && incoming.revision > current.revision;
+}
