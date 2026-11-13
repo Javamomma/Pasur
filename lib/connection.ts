@@ -144,15 +144,37 @@ export function acceptReply(
 
 export type Fetch = typeof fetch;
 
-/** The one check for "this body is a table": an object with a string code and a numeric revision. */
+const isArr = (x: unknown) => Array.isArray(x);
+const isNum = (x: unknown) => typeof x === 'number' && Number.isFinite(x);
+
+/**
+ * The one check for "this body is a table": the shape the page actually reads (see `view()` in
+ * lib/pasur.ts). Anything else is not a table, however valid the JSON.
+ */
 export function isGameView(d: unknown): d is { code: string; revision: number } {
-  const o = d as { code?: unknown; revision?: unknown } | null;
+  const o = d as Record<string, any> | null; // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
   return (
-    !!o &&
-    typeof o === 'object' &&
     typeof o.code === 'string' &&
-    typeof o.revision === 'number' &&
-    Number.isFinite(o.revision)
+    o.code.length === 10 &&
+    isNum(o.revision) &&
+    ['lobby', 'playing', 'round', 'finished'].includes(o.phase) &&
+    isNum(o.seat) &&
+    isArr(o.players) &&
+    o.players.every(
+      (p: any) =>
+        // eslint-disable-line @typescript-eslint/no-explicit-any
+        !!p && typeof p.name === 'string' && isArr(p.hand) && isNum(p.handCount),
+    ) &&
+    isArr(o.pool) &&
+    isArr(o.scores) &&
+    o.scores.length === 2 &&
+    o.scores.every(isNum) &&
+    !!o.rules &&
+    typeof o.rules === 'object' &&
+    isNum(o.rules.goal) &&
+    isArr(o.captured) &&
+    isArr(o.surs)
   );
 }
 

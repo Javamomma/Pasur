@@ -153,3 +153,52 @@ test('a join that times out says so and frees the button; it is never re-sent', 
   await guest.waitForTimeout(3_000);
   expect(joins).toBe(1);
 });
+
+test('a 409 on Deal whose recovery check is held cannot put its error on the home screen', async ({
+  browser,
+}) => {
+  const host = await (await browser.newContext()).newPage();
+  const guest = await (await browser.newContext()).newPage();
+  await host.goto('/');
+  await host.getByPlaceholder('Name at the table').fill('Hosty');
+  await host.getByRole('button', { name: /Create private table/ }).click();
+  const code = (await host.getByRole('button', { name: 'Copy table code' }).innerText()).trim();
+  await guest.goto(`/?table=${code}`);
+  await guest.getByPlaceholder('Name at the table').fill('Guesty');
+  await guest.getByRole('button', { name: 'Join table' }).click();
+  await expect(host.getByRole('button', { name: 'Deal the cards' })).toBeEnabled({ timeout: 12_000 });
+
+  let conflicted = false;
+  let heldGet = false;
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  await host.route('**/api/game**', async (route) => {
+    const req = route.request();
+    if (req.method() === 'POST' && req.postDataJSON()?.action === 'start') {
+      conflicted = true;
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'The table changed while you were dealing.' }),
+      });
+    }
+    if (req.method() === 'GET' && conflicted && !heldGet) {
+      heldGet = true; // the recovery check
+      await released;
+      return route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'boom' }),
+      }).catch(() => {});
+    }
+    return route.continue();
+  });
+  await host.getByRole('button', { name: 'Deal the cards' }).click();
+  await expect.poll(() => heldGet).toBe(true);
+  await host.getByRole('button', { name: 'Pasur home' }).click();
+  await expect(host.getByRole('button', { name: /Create private table/ })).toBeVisible();
+  release();
+  await host.waitForTimeout(1500);
+  await expect(host.getByRole('alert')).toHaveCount(0);
+  await expect(host.getByText('The table changed while you were dealing.')).toHaveCount(0);
+});

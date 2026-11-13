@@ -229,8 +229,20 @@ const hang = ((_: string, init?: RequestInit) =>
   new Promise<Response>((_res, rej) =>
     init?.signal?.addEventListener('abort', () => rej(new DOMException('x', 'AbortError'))),
   )) as unknown as typeof fetch;
+const validView = (revision = 1) => ({
+  code: 'AAAAAAAAAA',
+  revision,
+  phase: 'lobby',
+  seat: 0,
+  players: [{ name: 'A', hand: [], handCount: 0 }],
+  pool: [],
+  scores: [0, 0],
+  rules: { goal: 62 },
+  captured: [[], []],
+  surs: [0, 0],
+});
 const game = (revision: number) =>
-  new Response(JSON.stringify({ code: 'AAAAAAAAAA', revision }), { status: 200 });
+  new Response(JSON.stringify(validView(revision)), { status: 200 });
 
 test('a move that times out is sent once, then checked once, never re-sent', async (t) => {
   const c = clock(t);
@@ -311,20 +323,33 @@ test('an OK reply that is not a table is a failure, and a POST of that kind is u
   assert.equal(r.kind === 'reply' && r.status, 403);
 });
 
-test('isGameView', () => {
-  assert.equal(isGameView({ code: 'A', revision: 1 }), true);
-  for (const bad of [
-    null,
-    undefined,
-    '',
-    'x',
-    [],
-    {},
-    { code: 'A' },
-    { code: 1, revision: 1 },
-    { code: 'A', revision: NaN },
-  ])
-    assert.equal(isGameView(bad), false);
+test('isGameView accepts a real table and rejects anything the page could not render', () => {
+  assert.equal(isGameView(validView()), true);
+  const bad: unknown[] = [null, undefined, '', 'x', [], {}, { code: 'A', revision: 1 }];
+  const { code: _c, ...noCode } = validView();
+  bad.push(noCode, { ...validView(), code: 'SHORT' }, { ...validView(), revision: NaN });
+  bad.push({ ...validView(), phase: 'weird' }, { ...validView(), seat: '0' });
+  bad.push({ ...validView(), players: [{ name: 'A', hand: [] }] }, { ...validView(), players: {} });
+  bad.push({ ...validView(), pool: null }, { ...validView(), scores: [0] });
+  bad.push({ ...validView(), scores: [0, 'x'] }, { ...validView(), rules: {} });
+  bad.push({ ...validView(), captured: null }, { ...validView(), surs: null });
+  // The reviewer's blank-page body: valid JSON, 200, not a table.
+  bad.push({ code: 'AAAAAAAAAA', revision: 1 });
+  for (const b of bad) assert.equal(isGameView(b), false, JSON.stringify(b));
+});
+
+test('a 200 with valid but malformed JSON is a failure (poll) and uncertain (POST)', async () => {
+  const odd = (async () =>
+    new Response('{"code":"AAAAAAAAAA","revision":1}', { status: 200 })) as unknown as typeof fetch;
+  assert.equal((await request(odd, '/api/game?code=AAAAAAAAAA', {})).kind, 'failed');
+  let checks = 0;
+  const m = await submitMove(odd, { url: '/api/game', init: { method: 'POST' } }, TIMING, {
+    check: async () => {
+      checks++;
+    },
+  });
+  assert.equal(m.outcome, 'uncertain');
+  assert.equal(checks, 1);
 });
 
 test('classifyFailure: honest messages, and which failures stop polling', () => {

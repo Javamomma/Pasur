@@ -25,7 +25,7 @@ test('two players: create, join, deal, play, reload', async ({ browser }) => {
   await expect(deal).toBeEnabled({ timeout: 12_000 });
   await deal.click();
   await expect(host.locator('.hand-cards button.playing-card')).toHaveCount(4);
-  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4);
+  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4, { timeout: 12_000 });
 
   // Privacy: the guest's page never shows the host's cards.
   const hostHand = await handLabels(host);

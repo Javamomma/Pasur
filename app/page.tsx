@@ -96,8 +96,10 @@ export default function Home() {
   // an async result may be applied only while its generation is still the latest.
   const subId = useRef(0); // only the latest submission may touch busy / notice / error
   const subCtl = useRef<AbortController | null>(null);
+  const navCtl = useRef<AbortController | null>(null); // restore GETs
   const beginNav = () => {
     subCtl.current?.abort(); // leaving: outstanding submissions and their checks stop
+    navCtl.current?.abort();
     setRestoring(false);
     return ++navGen.current;
   };
@@ -165,7 +167,7 @@ export default function Home() {
           // The move may or may not have reached the server. Never re-send it: look once,
           // at the table it was for.
           onUncertain: () => {
-            if (!mine()) return;
+            if (!mine() || !isLatest(gen)) return;
             setBusy(false);
             if (!sentCode) setError(UNSURE_NO_TABLE);
             else if (onTable) setNotice(UNSURE);
@@ -182,7 +184,7 @@ export default function Home() {
             // A 200 for a timed-out join means the join landed: show it (a deliberate switch).
             const landed = r.kind === 'reply' && r.ok && isLatest(gen);
             if (landed) accept(r.data as GameView, action === 'join');
-            if (!mine()) return;
+            if (!mine() || !isLatest(gen)) return;
             setNotice((n) => (n === UNSURE ? '' : n));
             setError((e) => (e !== UNSURE ? e : landed ? '' : UNSURE_NO_TABLE));
           },
@@ -195,6 +197,7 @@ export default function Home() {
       if (status === 409 && (action === 'start' || action === 'rematch') && current.current) {
         // Someone else already dealt: show the table as it is now, no error banner.
         const fresh = await getTable(current.current.code, ctl.signal);
+        if (fresh.kind === 'cancelled') throw new CancelledMove();
         if (fresh.kind === 'reply' && fresh.ok) {
           if (isLatest(gen)) accept(fresh.data as GameView);
           return fresh.data as GameView;
@@ -208,7 +211,7 @@ export default function Home() {
       localStorage.setItem('pasur-name', name);
       return data as GameView;
     } catch (e) {
-      if (!(e instanceof UncertainMove) && !(e instanceof CancelledMove) && mine())
+      if (!(e instanceof UncertainMove) && !(e instanceof CancelledMove) && mine() && isLatest(gen))
         setError((e as Error).message);
       throw e;
     } finally {
@@ -227,7 +230,8 @@ export default function Home() {
       setCode(c);
       setScreen('join');
       const gen = beginNav();
-      void getTable(c).then((r) => {
+      const nav = (navCtl.current = new AbortController());
+      void getTable(c, nav.signal).then((r) => {
         if (r.kind === 'reply' && r.ok && isLatest(gen)) accept(r.data as GameView, true);
       });
     }
@@ -280,7 +284,13 @@ export default function Home() {
       document.removeEventListener('click', onTap, true);
     };
   }, [screen, game?.code]);
-  useEffect(() => () => subCtl.current?.abort(), []);
+  useEffect(
+    () => () => {
+      subCtl.current?.abort();
+      navCtl.current?.abort();
+    },
+    [],
+  );
   useEffect(() => {
     pollerRef.current?.noteChange();
   }, [game?.revision]);
@@ -373,7 +383,8 @@ export default function Home() {
     }
     const gen = beginNav();
     setRestoring(true);
-    const r = await getTable(knownCode);
+    const nav = (navCtl.current = new AbortController());
+    const r = await getTable(knownCode, nav.signal);
     if (isLatest(gen)) {
       if (r.kind === 'reply' && r.ok) accept(r.data as GameView, true);
       else if (r.kind !== 'cancelled') {
