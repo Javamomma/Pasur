@@ -1,5 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 
+/** Wait for ANOTHER page to notice a change: it polls every 5 s in the lobby, between rounds and at the end. */
+export const OTHER_PAGE_MS = 12_000;
+
 export const handLabels = (page: Page) =>
   page
     .locator('.hand-cards button.playing-card')
@@ -37,6 +40,8 @@ export async function seatAndDeal(host: Page, guest: Page) {
   await expect(guest.getByText('Waiting for the host to deal')).toBeVisible();
   await host.getByRole('button', { name: 'Deal the cards' }).click();
   await expect(host.locator('.hand-cards button.playing-card')).toHaveCount(4);
-  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4, { timeout: 12_000 });
+  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4, {
+    timeout: OTHER_PAGE_MS,
+  });
   return code;
 }

@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { playOneLegalCard, seatAndDeal } from './helpers';
+import { OTHER_PAGE_MS, playOneLegalCard, seatAndDeal } from './helpers';
 
 test('the guest deals the next round after a full first round', async ({ browser }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000); // 48 moves take 1.3-2 min
   const hostCtx = await browser.newContext({ viewport: { width: 390, height: 664 } });
   const guestCtx = await browser.newContext({ viewport: { width: 390, height: 664 } });
   const host = await hostCtx.newPage();
@@ -30,15 +30,17 @@ test('the guest deals the next round after a full first round', async ({ browser
 
   // Round is over for both; the guest (not the host) deals.
   await expect(next(host)).toBeVisible();
-  await expect(next(guest)).toBeEnabled();
+  await expect(next(guest)).toBeEnabled({ timeout: OTHER_PAGE_MS });
   await expect(host.getByText('Waiting for the host')).toHaveCount(0);
   await next(guest).click();
   for (const p of pages) {
-    await expect(p.getByText(/round 2 · deal 1/i).first()).toBeVisible();
-    await expect(p.locator('.hand-cards button.playing-card')).toHaveCount(4);
-    await expect(next(p)).toHaveCount(0);
+    await expect(p.getByText(/round 2 · deal 1/i).first()).toBeVisible({ timeout: OTHER_PAGE_MS });
+    await expect(p.locator('.hand-cards button.playing-card')).toHaveCount(4, {
+      timeout: OTHER_PAGE_MS,
+    });
+    await expect(next(p)).toHaveCount(0, { timeout: OTHER_PAGE_MS });
   }
-  await expect(host.getByText(/Guesty dealt round 2/)).toBeVisible();
+  await expect(host.getByText(/Guesty dealt round 2/)).toBeVisible({ timeout: OTHER_PAGE_MS });
 });
 
 test('a deal that lost the race shows the new round, not an error', async ({ browser }) => {
@@ -98,14 +100,20 @@ test('a deal that lost the race shows the new round, not an error', async ({ bro
     await route.continue().catch(() => {});
   });
   // Make sure the host page is on the round-end screen before holding.
-  await expect(host.getByRole('button', { name: 'Deal next round' })).toBeVisible();
-  await expect(guest.getByRole('button', { name: 'Deal next round' })).toBeVisible();
+  await expect(host.getByRole('button', { name: 'Deal next round' })).toBeVisible({
+    timeout: OTHER_PAGE_MS,
+  });
+  await expect(guest.getByRole('button', { name: 'Deal next round' })).toBeVisible({
+    timeout: OTHER_PAGE_MS,
+  });
   hold = true;
 
   // The guest deals round 2 through the UI.
   await guest.getByRole('button', { name: 'Deal next round' }).click();
-  await expect(guest.getByText(/round 2 · deal 1/i)).toBeVisible();
-  await expect(host.getByRole('button', { name: 'Deal next round' })).toBeVisible();
+  await expect(guest.getByText(/round 2 · deal 1/i)).toBeVisible({ timeout: OTHER_PAGE_MS });
+  await expect(host.getByRole('button', { name: 'Deal next round' })).toBeVisible({
+    timeout: OTHER_PAGE_MS,
+  });
 
   // The host, still on round 1, presses the button: its POST gets 409.
   const conflict = host.waitForResponse(
@@ -117,7 +125,7 @@ test('a deal that lost the race shows the new round, not an error', async ({ bro
   // Let the page's recovery fetch (and the held polls) through.
   hold = false;
   held.splice(0).forEach((release) => release());
-  await expect(host.getByText(/round 2 · deal 1/i)).toBeVisible();
+  await expect(host.getByText(/round 2 · deal 1/i)).toBeVisible({ timeout: OTHER_PAGE_MS });
   await expect(host.locator('[role="alert"]')).toHaveCount(0);
-  await expect(host.getByText(/Guesty dealt round 2/)).toBeVisible();
+  await expect(host.getByText(/Guesty dealt round 2/)).toBeVisible({ timeout: OTHER_PAGE_MS });
 });
