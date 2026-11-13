@@ -82,15 +82,13 @@ All tasks touch overlapping files (`package.json`, `app/page.tsx`), so they run 
   and lost-seat walkthroughs, guest "Next round" walkthrough.
 - Build report: `~/audits/reports/pasur/2026-11-12-build-report.md`.
 
-## Status (2026-11-12 17:22, lead paused: usage limit)
+## Status (2026-11-12 23:00): done, not pushed
 
-Merged on the base branch: AGENTS.md (72143c8), format (5255d72, 00aa924), verify-gate (e36aa28),
-local-table (0750b9e), anyone-deals (69dafff). Each was verified by the lead and approved by the reviewer.
-- Task 5 `back-to-table` was dispatched (worktree `Pasur-task-back-to-table`); check, verify and review it before merging.
-- Still to do: task 6 `connection`, task 7 `docs`, the adversarial pass, "after" evidence, and the build report.
-- Builder briefs and the lead's evidence scripts are in `~/audits/reports/pasur/2026-11-12-evidence/`
-  (prompts/, lib.mjs, shots.mjs, polls.mjs). "Before" results (at 0750b9e, same behaviour as 6a12630):
-  39 polls/min while playing, 40/min on the score screen, still 40/min after 10 idle minutes; guest sees
-  "Waiting for the host" at round end and game end; ← Tables mid-game only returns via reload; a held move
-  locks the button for 30 s (as long as the server holds it); lost seat and deleted table both say "Reconnecting…".
-- To redo "after": run `pnpm table`, then `MODE=after OUT=<dir> node shots.mjs` and `IDLE=1 OUT=<dir> node polls.mjs`.
+All tasks merged on the base branch (start 6a12630, end: see `git log`), each verified by the lead and approved by
+the GPT reviewer: AGENTS.md, format, verify-gate, local-table, anyone-deals, back-to-table, connection (a–d plus two
+robustness commits), docs, the adversarial-pass hardening (7 commits + an e2e timing fix) and a label/fallback polish.
+- `pnpm verify`: 31 tests (was 7), tsc, build. `pnpm e2e`: 17 browser tests.
+- Build report: `~/audits/reports/pasur/2026-11-12-build-report.md`. Evidence, builder briefs and the lead's scripts:
+  `~/audits/reports/pasur/2026-11-12-evidence/`.
+- Deferred (see the report): seat recovery (incl. a Join whose reply is lost), "checking your table" feedback on first
+  load, Enter-to-submit, renaming "← Tables", fitting the hand on one phone screen, game-ending fixed-deck tests.
