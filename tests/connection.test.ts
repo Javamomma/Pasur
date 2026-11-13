@@ -144,3 +144,52 @@ test('acceptReply: an older reply never replaces a newer table', async () => {
   assert.deepEqual(state, t('BBBBBBBBBB', 1));
   assert.equal(acceptReply(null, t('CCCCCCCCCC', 3), { switchTable: false }), true);
 });
+
+test('a move that times out is sent once, then checked once, never re-sent', async () => {
+  const { submitMove, request } = await import('../lib/connection.ts');
+  const calls: string[] = [];
+  const fakeFetch = (async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    calls.push(method);
+    if (method === 'POST') {
+      // never answers, but honours the abort signal
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('aborted', 'AbortError')),
+        );
+      });
+    }
+    return new Response(JSON.stringify({ code: 'AAAAAAAAAA', revision: 8 }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  let uncertain = 0;
+  let checked: unknown = null;
+  const timing = { ...fast, requestTimeoutMs: 30 };
+  const started = Date.now();
+  const out = await submitMove(
+    fakeFetch,
+    { url: '/api/game', init: { method: 'POST', body: '{}' } },
+    timing,
+    {
+      onUncertain: () => uncertain++,
+      check: async () => {
+        checked = await request(fakeFetch, '/api/game?code=AAAAAAAAAA', {}, timing);
+      },
+    },
+  );
+  assert.equal(out.outcome, 'uncertain');
+  assert.equal(uncertain, 1);
+  assert.deepEqual(calls, ['POST', 'GET']);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal((checked as { kind: string }).kind, 'reply');
+});
+
+test('a slow poll is abandoned after the limit and reported as failed', async () => {
+  const { request } = await import('../lib/connection.ts');
+  const hang = ((_: string, init?: RequestInit) =>
+    new Promise<Response>((_res, rej) =>
+      init?.signal?.addEventListener('abort', () => rej(new DOMException('x', 'AbortError'))),
+    )) as unknown as typeof fetch;
+  const r = await request(hang, '/api/game?code=A', {}, { ...fast, requestTimeoutMs: 20 });
+  assert.equal(r.kind, 'failed');
+});

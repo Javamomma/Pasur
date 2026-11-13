@@ -46,13 +46,18 @@ export function createPoller(o: {
     if (stopped || paused) return;
     timer = setTimeout(tick, pollDelay(o.phase(), timing));
   };
-  const run = async () => {
+  let chain: Promise<void> = Promise.resolve();
+  const run = (): Promise<void> => {
     if (inFlight) {
       again = true;
-      return;
+      return chain; // resolves once the poll in flight (and the one queued behind it) is done
     }
-    if (o.isHidden?.()) return;
+    if (o.isHidden?.()) return Promise.resolve();
     inFlight = true;
+    chain = go();
+    return chain;
+  };
+  const go = async (): Promise<void> => {
     let result: PollResult;
     try {
       result = await o.poll();
@@ -64,7 +69,10 @@ export function createPoller(o: {
     if (result === 'stop') stopped = true;
     if (again && !stopped) {
       again = false;
-      return run();
+      if (!o.isHidden?.()) {
+        inFlight = true;
+        return go();
+      }
     }
   };
   async function tick() {
@@ -103,10 +111,13 @@ export function createPoller(o: {
       void run().then(schedule);
     },
     /** Poll now (visible again, back online, a check after an unsure move) without changing the idle clock. */
-    kick() {
-      if (!running || stopped) return;
-      if (paused) return this.resume();
-      void run().then(schedule);
+    kick(): Promise<void> {
+      if (!running || stopped) return Promise.resolve();
+      if (paused) {
+        this.resume();
+        return chain;
+      }
+      return run().then(schedule);
     },
   };
 }
@@ -125,4 +136,48 @@ export function acceptReply(
 ): boolean {
   if (!current || opts.switchTable) return true;
   return incoming.code === current.code && incoming.revision > current.revision;
+}
+
+export type Fetch = typeof fetch;
+
+/** What a request came to: the server answered (any status), or it did not (network error / timeout). */
+export type Reply = { kind: 'reply'; ok: boolean; status: number; data: any } | { kind: 'failed' };
+
+/** One request with a time limit. `data` is null when the body is not JSON. */
+export async function request(
+  fetchFn: Fetch,
+  url: string,
+  init: RequestInit,
+  timing: Timing = TIMING,
+): Promise<Reply> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timing.requestTimeoutMs);
+  try {
+    const r = await fetchFn(url, { ...init, signal: ctl.signal });
+    const data = await r.json().catch(() => null);
+    return { kind: 'reply', ok: r.ok, status: r.status, data };
+  } catch {
+    return { kind: 'failed' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Send a move exactly once. If it times out or the network fails we cannot know whether the
+ * server stored it: say so (onUncertain), look at the table once (check), and never send again.
+ */
+export async function submitMove(
+  fetchFn: Fetch,
+  post: { url: string; init: RequestInit },
+  timing: Timing,
+  hooks: { onUncertain?: () => void; check: () => Promise<void> },
+): Promise<
+  { outcome: 'reply'; reply: Extract<Reply, { kind: 'reply' }> } | { outcome: 'uncertain' }
+> {
+  const reply = await request(fetchFn, post.url, post.init, timing);
+  if (reply.kind === 'reply') return { outcome: 'reply', reply };
+  hooks.onUncertain?.();
+  await hooks.check();
+  return { outcome: 'uncertain' };
 }

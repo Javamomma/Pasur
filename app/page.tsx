@@ -11,7 +11,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { acceptReply, createPoller } from '@/lib/connection';
+import { acceptReply, createPoller, request, submitMove, TIMING } from '@/lib/connection';
 import { label, rank, options, team, count, suitSymbols, type GameView } from '@/lib/pasur';
 import {
   Share2,
@@ -58,6 +58,9 @@ function PlayingCard({
     </button>
   );
 }
+const UNSURE = 'Not sure that went through — checking the table…';
+const UNSURE_NO_TABLE = 'Not sure that went through. Check your connection and try again.';
+class UncertainMove extends Error {}
 export default function Home() {
   const [name, setName] = useState(''),
     [code, setCode] = useState(''),
@@ -99,40 +102,59 @@ export default function Home() {
     history.replaceState(null, '', '?table=' + g.code);
     return true;
   }
+  const getTable = (c: string) =>
+    request(fetch, '/api/game?code=' + encodeURIComponent(c), { cache: 'no-store' }, TIMING);
   async function send(action: string, extra: Record<string, unknown> = {}) {
     const deliberate = action === 'create' || action === 'join';
     const gen = deliberate ? beginNav() : navGen.current;
     setBusy(true);
     setError('');
     try {
-      const r = await fetch('/api/game', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          code: current.current?.code || code,
-          name,
-          capacity: Number(capacity),
-          goal: Number(goal),
-          surLimit: unlimited ? 999 : 50,
-          cancelSurs,
-          revision: current.current?.revision,
-          ...extra,
-        }),
-      });
-      const data = (await r.json()) as GameView & { error?: string };
-      if (r.status === 409 && (action === 'start' || action === 'rematch') && current.current) {
+      const out = await submitMove(
+        fetch,
+        {
+          url: '/api/game',
+          init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action,
+              code: current.current?.code || code,
+              name,
+              capacity: Number(capacity),
+              goal: Number(goal),
+              surLimit: unlimited ? 999 : 50,
+              cancelSurs,
+              revision: current.current?.revision,
+              ...extra,
+            }),
+          },
+        },
+        TIMING,
+        {
+          // The move may or may not have reached the server. Never re-send it: look once.
+          onUncertain: () => {
+            setBusy(false);
+            if (current.current) setNotice(UNSURE);
+            else setError(UNSURE_NO_TABLE);
+          },
+          check: async () => {
+            await pollerRef.current?.kick();
+            setNotice((n) => (n === UNSURE ? '' : n));
+          },
+        },
+      );
+      if (out.outcome === 'uncertain') throw new UncertainMove();
+      const { ok, status, data } = out.reply;
+      if (status === 409 && (action === 'start' || action === 'rematch') && current.current) {
         // Someone else already dealt: show the table as it is now, no error banner.
-        const fresh = await fetch('/api/game?code=' + encodeURIComponent(current.current.code), {
-          cache: 'no-store',
-        });
-        if (fresh.ok) {
-          const latest = (await fresh.json()) as GameView;
-          if (isLatest(gen)) accept(latest);
-          return latest;
+        const fresh = await getTable(current.current.code);
+        if (fresh.kind === 'reply' && fresh.ok) {
+          if (isLatest(gen)) accept(fresh.data as GameView);
+          return fresh.data as GameView;
         }
       }
-      if (!r.ok) throw Error(data.error || 'Please try again.');
+      if (!ok) throw Error(data?.error || 'Please try again.');
       if (!isLatest(gen)) return data as GameView;
       accept(data, deliberate);
       setCard('');
@@ -140,7 +162,7 @@ export default function Home() {
       localStorage.setItem('pasur-name', name);
       return data as GameView;
     } catch (e) {
-      setError((e as Error).message);
+      if (!(e instanceof UncertainMove)) setError((e as Error).message);
       throw e;
     } finally {
       setBusy(false);
@@ -158,13 +180,9 @@ export default function Home() {
       setCode(c);
       setScreen('join');
       const gen = beginNav();
-      fetch('/api/game?code=' + encodeURIComponent(c))
-        .then(async (r) => {
-          if (!r.ok) return;
-          const g = (await r.json()) as GameView;
-          if (isLatest(gen)) accept(g, true);
-        })
-        .catch(() => {});
+      void getTable(c).then((r) => {
+        if (r.kind === 'reply' && r.ok && isLatest(gen)) accept(r.data as GameView, true);
+      });
     }
   }, []);
   useEffect(() => {
@@ -175,16 +193,13 @@ export default function Home() {
       isHidden: () => document.hidden,
       onPause: () => !stopped && setPaused(true),
       poll: async () => {
-        try {
-          const r = await fetch('/api/game?code=' + game.code, { cache: 'no-store' });
-          const d = (await r.json()) as GameView & { error?: string };
-          if (!r.ok) throw Error(d.error);
-          if (!stopped) {
-            setNotice('');
-            setGame((old) => (acceptReply(old, d, { switchTable: false }) ? d : old));
-          }
-        } catch {
-          if (!stopped) setNotice('Connection interrupted. Reconnecting…');
+        const r = await getTable(game.code);
+        if (stopped) return;
+        if (r.kind === 'reply' && r.ok) {
+          setNotice('');
+          setGame((old) => (acceptReply(old, r.data, { switchTable: false }) ? r.data : old));
+        } else {
+          setNotice('Connection interrupted. Reconnecting…');
         }
       },
     });
@@ -297,27 +312,15 @@ export default function Home() {
     }
     const gen = beginNav();
     setRestoring(true);
-    try {
-      const r = await fetch('/api/game?code=' + encodeURIComponent(knownCode), {
-        cache: 'no-store',
-      });
-      if (r.ok) {
-        const g = (await r.json()) as GameView;
-        if (isLatest(gen)) accept(g, true);
-      } else if (r.status === 403 || r.status === 404) {
-        const d = (await r.json().catch(() => ({}))) as { error?: string };
-        if (isLatest(gen)) {
-          setError(d.error || 'This table is not available.');
-          localStorage.removeItem('pasur-last-table');
-          setLastCode('');
-        }
-      } else if (isLatest(gen)) {
-        setError('Connection interrupted. Try again.');
-      }
-    } catch {
-      if (isLatest(gen)) setError('Connection interrupted. Try again.');
-    } finally {
-      if (isLatest(gen)) setRestoring(false);
+    const r = await getTable(knownCode);
+    if (isLatest(gen)) {
+      if (r.kind === 'reply' && r.ok) accept(r.data as GameView, true);
+      else if (r.kind === 'reply' && (r.status === 403 || r.status === 404)) {
+        setError(r.data?.error || 'This table is not available.');
+        localStorage.removeItem('pasur-last-table');
+        setLastCode('');
+      } else setError('Connection interrupted. Try again.');
+      setRestoring(false);
     }
   }
   function goHome() {
