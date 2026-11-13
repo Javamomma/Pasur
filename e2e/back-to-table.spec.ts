@@ -3,6 +3,34 @@ import { handLabels, playOneLegalCard, seatAndDeal } from './helpers';
 
 const viewport = { width: 390, height: 664 };
 
+/**
+ * Hold the first table GET the page makes (route-level), until release(). `finished` resolves
+ * once that request has really ended (answered, or cancelled by the page), plus two animation
+ * frames so the page has handled the outcome.
+ */
+async function holdFirstGet(page: import('@playwright/test').Page) {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let ended!: () => void;
+  const endedP = new Promise<void>((r) => (ended = r));
+  let first: import('@playwright/test').Request | undefined;
+  const end = (r: import('@playwright/test').Request) => r === first && ended();
+  page.on('requestfinished', end);
+  page.on('requestfailed', end);
+  await page.route('**/api/game?code=*', async (route) => {
+    first ??= route.request();
+    await held;
+    await route.continue().catch(() => {}); // the page may already have cancelled it
+  });
+  const finished = async () => {
+    await endedP;
+    await page.evaluate(
+      () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+    );
+  };
+  return { release, finished };
+}
+
 test('Tables then Back to your table restores the same table without a reload', async ({
   browser,
 }) => {
@@ -94,12 +122,7 @@ test('a slow restore does not overwrite a table created meanwhile', async ({ bro
   await guest.unroute('**/api/game?code=*');
 
   // Hold the restore GET for table A.
-  let release!: () => void;
-  const held = new Promise<void>((r) => (release = r));
-  await guest.route('**/api/game?code=*', async (route) => {
-    await held;
-    await route.continue();
-  });
+  const hold = await holdFirstGet(guest);
   await guest.getByRole('button', { name: 'Back to your table' }).click();
   await expect(guest.getByRole('button', { name: 'Opening your table…' })).toBeDisabled();
 
@@ -110,8 +133,8 @@ test('a slow restore does not overwrite a table created meanwhile', async ({ bro
   expect(codeB).not.toBe(codeA);
 
   // Release A's reply: the page must stay on B.
-  release();
-  await guest.waitForTimeout(1000);
+  hold.release();
+  await hold.finished();
   await expect(guest.getByRole('button', { name: 'Copy table code' })).toHaveText(codeB);
   expect(await guest.evaluate(() => localStorage.getItem('pasur-last-table'))).toBe(codeB);
   expect(new URL(guest.url()).searchParams.get('table')).toBe(codeB);
@@ -121,14 +144,9 @@ test('a slow restore does not overwrite a table created meanwhile', async ({ bro
 
 /** Open the page with table A stored, the initial restore GET held until `release()`. */
 async function holdInitialRestore(guest: import('@playwright/test').Page) {
-  let release!: () => void;
-  const held = new Promise<void>((r) => (release = r));
-  await guest.route('**/api/game?code=*', async (route) => {
-    await held;
-    await route.continue();
-  });
+  const hold = await holdFirstGet(guest);
   await guest.goto('/');
-  return release;
+  return hold;
 }
 
 test('a slow initial-load restore does not overwrite a table created meanwhile', async ({
@@ -140,15 +158,15 @@ test('a slow initial-load restore does not overwrite a table created meanwhile',
   const guest = await guestCtx.newPage();
   const codeA = await seatAndDeal(host, guest);
 
-  const release = await holdInitialRestore(guest);
+  const hold = await holdInitialRestore(guest);
   await guest.getByRole('button', { name: 'Create a different table' }).click();
   await guest.getByPlaceholder('Name at the table').fill('Guesty');
   await guest.getByRole('button', { name: /Create private table/ }).click();
   const codeB = (await guest.getByRole('button', { name: 'Copy table code' }).innerText()).trim();
   expect(codeB).not.toBe(codeA);
 
-  release();
-  await guest.waitForTimeout(1000);
+  hold.release();
+  await hold.finished();
   await expect(guest.getByRole('button', { name: 'Copy table code' })).toHaveText(codeB);
   expect(await guest.evaluate(() => localStorage.getItem('pasur-last-table'))).toBe(codeB);
   expect(new URL(guest.url()).searchParams.get('table')).toBe(codeB);
@@ -163,13 +181,13 @@ test('a pending restore cannot pull the player off the join screen', async ({ br
   const guest = await guestCtx.newPage();
   await seatAndDeal(host, guest);
 
-  const release = await holdInitialRestore(guest);
+  const hold = await holdInitialRestore(guest);
   await guest.getByRole('button', { name: 'Create a different table' }).click();
   await guest.getByRole('button', { name: 'Have an invitation? Join a table' }).click();
   await expect(guest.getByRole('heading', { name: 'Join the table' })).toBeVisible();
 
-  release();
-  await guest.waitForTimeout(1000);
+  hold.release();
+  await hold.finished();
   await expect(guest.getByRole('heading', { name: 'Join the table' })).toBeVisible();
   await expect(guest.getByRole('button', { name: 'Join table' })).toBeVisible();
   await hostCtx.close();
