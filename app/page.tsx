@@ -71,17 +71,31 @@ export default function Home() {
     [notice, setNotice] = useState(''),
     [card, setCard] = useState(''),
     [take, setTake] = useState<string[]>([]),
-    [copied, setCopied] = useState(false);
+    [copied, setCopied] = useState(false),
+    [lastCode, setLastCode] = useState(''),
+    [restoring, setRestoring] = useState(false);
   const current = useRef<GameView | null>(null);
   current.current = game;
+  const navGen = useRef(0);
+  // Every navigation (restore, create, join, home, join screen) takes a new generation;
+  // an async result may be applied only while its generation is still the latest.
+  const beginNav = () => {
+    setRestoring(false);
+    return ++navGen.current;
+  };
+  const isLatest = (gen: number) => gen === navGen.current;
   function accept(g: GameView) {
     setGame(g);
     setCode(g.code);
     setScreen('table');
     localStorage.setItem('pasur-last-table', g.code);
+    setLastCode(g.code);
     history.replaceState(null, '', '?table=' + g.code);
   }
   async function send(action: string, extra: Record<string, unknown> = {}) {
+    if (action === 'create' || action === 'join') {
+      beginNav();
+    }
     setBusy(true);
     setError('');
     try {
@@ -130,14 +144,18 @@ export default function Home() {
   };
   useEffect(() => {
     setName(localStorage.getItem('pasur-name') || '');
+    setLastCode(localStorage.getItem('pasur-last-table') || '');
     const c =
       new URLSearchParams(location.search).get('table') || localStorage.getItem('pasur-last-table');
     if (c) {
       setCode(c);
       setScreen('join');
+      const gen = beginNav();
       fetch('/api/game?code=' + encodeURIComponent(c))
         .then(async (r) => {
-          if (r.ok) accept((await r.json()) as GameView);
+          if (!r.ok) return;
+          const g = (await r.json()) as GameView;
+          if (isLatest(gen)) accept(g);
         })
         .catch(() => {});
     }
@@ -249,7 +267,41 @@ export default function Home() {
       .filter((_, i) => team(i) === t)
       .map((p) => p.name)
       .join(' & ') || 'Waiting';
+  const knownCode = game?.code || lastCode;
+  async function backToTable() {
+    if (!knownCode || restoring) return;
+    setError('');
+    if (game && game.code === knownCode) {
+      accept(game);
+      return;
+    }
+    const gen = beginNav();
+    setRestoring(true);
+    try {
+      const r = await fetch('/api/game?code=' + encodeURIComponent(knownCode), {
+        cache: 'no-store',
+      });
+      if (r.ok) {
+        const g = (await r.json()) as GameView;
+        if (isLatest(gen)) accept(g);
+      } else if (r.status === 403 || r.status === 404) {
+        const d = (await r.json().catch(() => ({}))) as { error?: string };
+        if (isLatest(gen)) {
+          setError(d.error || 'This table is not available.');
+          localStorage.removeItem('pasur-last-table');
+          setLastCode('');
+        }
+      } else if (isLatest(gen)) {
+        setError('Connection interrupted. Try again.');
+      }
+    } catch {
+      if (isLatest(gen)) setError('Connection interrupted. Try again.');
+    } finally {
+      if (isLatest(gen)) setRestoring(false);
+    }
+  }
   function goHome() {
+    beginNav();
     setScreen('home');
     setError('');
     history.replaceState(null, '', '/');
@@ -332,6 +384,28 @@ export default function Home() {
             <p>Pick your seats. Bring your people.</p>
           </div>
           <div className="setup-panel">
+            {screen === 'home' && knownCode && (
+              <div className="resume">
+                <Button
+                  className="primary-action"
+                  disabled={restoring}
+                  onClick={() => void backToTable()}
+                >
+                  {restoring ? 'Opening your table…' : 'Back to your table'}
+                  <ChevronRight size={18} />
+                </Button>
+                <p>
+                  Table {knownCode}
+                  {game?.code === knownCode &&
+                    ' · ' +
+                      (game.phase === 'lobby'
+                        ? 'Lobby'
+                        : game.phase === 'finished'
+                          ? 'Game complete'
+                          : `Round ${game.round}`)}
+                </p>
+              </div>
+            )}
             <div className="setup-title">
               <h2>{screen === 'join' ? 'Join the table' : 'Set the table'}</h2>
               <LockKeyhole size={19} />
@@ -431,7 +505,8 @@ export default function Home() {
                   </div>
                 </details>
                 <Button
-                  className="primary-action"
+                  variant={knownCode ? 'outline' : 'default'}
+                  className={knownCode ? 'secondary-action create-secondary' : 'primary-action'}
                   disabled={busy || !name.trim()}
                   onClick={() => act('create')}
                 >
@@ -442,6 +517,7 @@ export default function Home() {
                   variant="ghost"
                   className="secondary-action"
                   onClick={() => {
+                    beginNav();
                     setScreen('join');
                     setGame(null);
                     setCode('');

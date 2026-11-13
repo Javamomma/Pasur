@@ -266,6 +266,23 @@ h2 {
 .primary-action:disabled {
   opacity: 0.5;
 }
+.resume {
+  margin-bottom: 24px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid #ffffff1c;
+}
+.resume p {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: #b4c8bf;
+  letter-spacing: 0.04em;
+}
+.create-secondary {
+  margin-top: 0;
+  min-height: 50px;
+  font-size: 1rem;
+}
 .secondary-action {
   width: 100%;
   min-height: 44px;
