@@ -37,7 +37,10 @@ pnpm format:check   # Prettier check
 pnpm verify
 ```
 
-Run it before every commit you hand back. Run `pnpm e2e` too when you change `app/page.tsx`,
+Run it before every commit you hand back. It does not bundle the Netlify Function (Netlify does that during deploy, and a
+bundling error would only show there); to check it locally run
+`pnpm exec vite build --ssr netlify/functions/game.ts --outDir <tmp>` with `<tmp>` a throwaway directory.
+Run `pnpm e2e` too when you change `app/page.tsx`,
 `lib/connection.ts`, `server/game-api.ts` or `dev/`.
 The line `Pasur storage request failed. Error` in test output comes from an intentional
 failure test; it is not a failure.
@@ -57,6 +60,9 @@ failure test; it is not a failure.
   generation in `app/page.tsx`) and only if its revision is newer (`acceptReply` in `lib/connection.ts`).
 - The page never re-sends a move automatically. After a timeout it looks at the table once.
 - Keep the origin check, the 2 KB body cap and the cookie flags in `server/game-api.ts`.
+- `main.tsx` wraps the page in an error boundary (`app/error-boundary.tsx`): a render error shows "Something went wrong on this page." and a Reload button.
+- Once a poll reports a lost seat or table, the stale table is locked: its controls are disabled and dimmed, and the turn label never says "Your turn".
+- Dev routes `POST /__table/*` (`dev/local-table.ts`) need `Content-Type: application/json` and refuse a foreign `Origin` (403); calls with no Origin (curl, Node, Playwright) work.
 
 ## How the page talks to the server
 
@@ -69,12 +75,16 @@ failure test; it is not a failure.
 - A reply is used only if `acceptReply` allows it. A deliberate switch (create, join, first load, Back to your table)
   is allowed to change table; a poll or move reply must be the same table with a higher revision.
   An OK reply whose body is not a table (`isGameView`) counts as a failed request.
-- A move that times out or fails at the network: "Not sure that went through — checking the table…", one GET, no re-send.
-- Poll or request failures (`classifyFailure`):
+- Polls and GETs (`classifyFailure`):
   - 403 → "This browser is no longer seated at this table." Stops polling, offers the home screen, forgets the saved table.
   - 404 → "This table no longer exists." Same.
   - Network error, timeout, 5xx, or a non-JSON body → "Connection interrupted. Reconnecting…" and polling continues.
-  - Any other 4xx → the server's own message.
+  - Any other 4xx → the server's own message, and polling stops.
+- Submissions (create, join, deal, play, claim, rematch; `send` in `app/page.tsx`), which do not use `classifyFailure`:
+  - Any error status (400, 403, 404, 409, 5xx…) shows the server's own message, or "Please try again." when the body has none;
+    nothing is forgotten and nothing stops. The next poll then reports a lost seat or table.
+  - A timeout, a network error, or an OK reply whose body is not a table: "Not sure that went through — checking the table…",
+    one GET, no re-send (with no table yet, as after a Create: "Not sure that went through. Check your connection and try again.").
 - A 409 on a deal or rematch (someone else dealt first) is not shown as an error: the page loads the table as it is now.
 
 ## Decisions you might want to revisit

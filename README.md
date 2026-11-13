@@ -44,7 +44,7 @@ Dev-only routes on the same server (JSON):
 
 `pnpm e2e` runs the Playwright smoke test (two browser contexts: create, join, deal, play, reload). On a fresh machine run `pnpm exec playwright install chromium` once first. It starts its own table server on port 5175 (never reusing one on 5174), so it always tests this checkout.
 
-The memory table forgets everything when the server stops. It is dev-only code in `dev/` and is never part of the production build or the Netlify Function.
+The dev routes accept only `application/json` POSTs and refuse a foreign `Origin` (403); curl and tests, which send no Origin, work. The memory table forgets everything when the server stops. It is dev-only code in `dev/` and is never part of the production build or the Netlify Function.
 
 ## Architecture
 
@@ -65,7 +65,9 @@ How the page keeps up with the table (constants in `lib/connection.ts`):
 - After 10 minutes without a change it pauses and says "Paused while nobody is playing. Tap to reconnect." A tap, the tab becoming visible again, or the browser coming back online resumes it.
 - Every request has a 10 second limit. A move that times out is never sent again automatically: the page says "Not sure that went through — checking the table…" and looks at the table once.
 - The page takes a reply only for the table the player is on, and only if its revision is newer than what is on screen, so a slow older reply cannot replace a newer table. Choosing a table (create, join, Back to your table) is the only way to switch.
-- If the server says the seat is gone (403) the page says "This browser is no longer seated at this table." If the table is gone (404) it says "This table no longer exists." Both stop polling and offer the home screen. Network errors, timeouts and server errors say "Connection interrupted. Reconnecting…" and keep trying.
+- If a poll finds the seat gone (403) the page says "This browser is no longer seated at this table." If the table is gone (404) it says "This table no longer exists." Both stop polling, lock the stale table (controls disabled and dimmed) and offer the home screen. Network errors, timeouts and server errors on a poll say "Connection interrupted. Reconnecting…" and keep trying.
+- A move, join or create that fails shows the server's own message. One that times out, hits a network error or gets a reply that is not a table says "Not sure that went through…".
+- If the page itself fails to render it shows "Something went wrong on this page." with a Reload button.
 - The home screen offers "Back to your table" for the last table played on this browser.
 
 ## Rules
@@ -76,7 +78,7 @@ Hosts may select a goal of 100, disable sur cancellation or remove the 50-point 
 
 ## Verification and limitations
 
-`pnpm verify` runs `pnpm test` and then `pnpm build`; the deploy runs it too. The tests exercise full rounds, capture rules, scoring, hidden hands, permissions, who may deal, stale/concurrent writes, storage failures and the page's reply, timeout and polling rules. The build checks TypeScript and creates the frontend bundle. The function is separately bundled for Node as a deployment check.
+`pnpm verify` runs `pnpm test` and then `pnpm build`; the deploy runs it too. The tests exercise full rounds, capture rules, scoring, hidden hands, permissions, who may deal, stale/concurrent writes, storage failures and the page's reply, timeout and polling rules. The build checks TypeScript and creates the frontend bundle. It does not bundle the Netlify Function: Netlify does that during deploy. To check the bundle locally run `pnpm exec vite build --ssr netlify/functions/game.ts --outDir <tmp>` (any throwaway directory).
 
 `pnpm e2e` plays real tables in two browser contexts on the local table (create, join, deal, play, reload, next round, Back to your table, slow and lost replies). It is not part of `pnpm verify`.
 
