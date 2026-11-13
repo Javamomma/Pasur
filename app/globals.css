@@ -796,3 +796,8 @@ button.connection {
   text-align: left;
   cursor: pointer;
 }
+
+.table-lost {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}

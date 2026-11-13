@@ -4,9 +4,12 @@ import { playOneLegalCard, seatAndDeal } from './helpers';
 const post = (page: Page, route: string, data: unknown) =>
   page.request.post(`/__table/${route}`, { data });
 const rooms = async (page: Page, code: string) =>
-  ((await (await page.request.get('/__table/rooms')).json()) as { code: string; revision: number }[]).find(
-    (r) => r.code === code,
-  )!;
+  (
+    (await (await page.request.get('/__table/rooms')).json()) as {
+      code: string;
+      revision: number;
+    }[]
+  ).find((r) => r.code === code)!;
 
 async function twoPlayers(browser: import('@playwright/test').Browser) {
   const host = await (await browser.newContext()).newPage();
@@ -33,13 +36,27 @@ test('a hung move is sent once, the button comes back, no duplicate move', async
   await expect(mover.getByRole('alert')).toHaveCount(0);
 });
 
-test('a seat lost on the server says so, with a way home, and never Reconnecting', async ({ browser }) => {
-  const { host, guest, code } = await twoPlayers(browser);
-  await post(host, 'unseat', { code, seat: 1 });
+test('a seat lost on the server says so, with a way home, and never Reconnecting', async ({
+  browser,
+}) => {
+  const { host, guest: other, code } = await twoPlayers(browser);
+  // Lose the seat of whoever is on turn, so a stale "Your turn" and an enabled hand would show.
+  const hostTurn = await host.getByText('Your turn', { exact: true }).isVisible();
+  const guest = hostTurn ? host : other;
+  await post(host, 'unseat', { code, seat: hostTurn ? 0 : 1 });
   await expect(guest.getByText('This browser is no longer seated at this table.')).toBeVisible({
     timeout: 8_000,
   });
   await expect(guest.getByText('Reconnecting')).toHaveCount(0);
+  // The stale table is frozen: no "Your turn", no enabled card, no enabled Play button.
+  await expect(guest.getByText('Your turn', { exact: true })).toHaveCount(0);
+  const cards = guest.locator('.hand-cards button.playing-card');
+  expect(await cards.count()).toBe(4);
+  for (let i = 0; i < 4; i++) await expect(cards.nth(i)).toBeDisabled();
+  await expect(guest.locator('.primary-action')).toBeDisabled();
+  await expect(guest.locator('[aria-disabled="true"]')).toBeVisible();
+  await expect(guest.getByRole('button', { name: /Tables/ })).toBeEnabled();
+  await expect(guest.getByRole('button', { name: /Invite/ })).toBeEnabled();
   await guest.getByRole('button', { name: 'Back to the home screen' }).click();
   await expect(guest.getByRole('button', { name: 'Back to your table' })).toHaveCount(0);
   await expect(guest.getByRole('button', { name: /Create private table/ })).toBeVisible();
@@ -166,7 +183,9 @@ test('a 409 on Deal whose recovery check is held cannot put its error on the hom
   await guest.goto(`/?table=${code}`);
   await guest.getByPlaceholder('Name at the table').fill('Guesty');
   await guest.getByRole('button', { name: 'Join table' }).click();
-  await expect(host.getByRole('button', { name: 'Deal the cards' })).toBeEnabled({ timeout: 12_000 });
+  await expect(host.getByRole('button', { name: 'Deal the cards' })).toBeEnabled({
+    timeout: 12_000,
+  });
 
   let conflicted = false;
   let heldGet = false;
@@ -185,11 +204,13 @@ test('a 409 on Deal whose recovery check is held cannot put its error on the hom
     if (req.method() === 'GET' && conflicted && !heldGet) {
       heldGet = true; // the recovery check
       await released;
-      return route.fulfill({
-        status: 500,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'boom' }),
-      }).catch(() => {});
+      return route
+        .fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'boom' }),
+        })
+        .catch(() => {});
     }
     return route.continue();
   });

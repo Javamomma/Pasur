@@ -355,7 +355,8 @@ export default function Home() {
       if ((e as Error).name !== 'AbortError') setError('Copy this invitation: ' + url);
     }
   }
-  const myTurn = !!game && game.phase === 'playing' && game.turn === game.seat;
+  const frozen = busy || !!lost;
+  const myTurn = !lost && !!game && game.phase === 'playing' && game.turn === game.seat;
   const legal = card && game ? options(card, game.pool) : [];
   const valid =
     !!card &&
@@ -661,284 +662,292 @@ export default function Home() {
                 {copied ? <Check size={17} /> : <Share2 size={17} />}Invite
               </Button>
             </div>
-            {game.phase === 'lobby' ? (
-              <div className="lobby-panel">
-                <div className="eyebrow">YOUR TABLE IS OPEN</div>
-                <h1>Save a seat.</h1>
-                <p>
-                  Share the invitation with{' '}
-                  {game.capacity === 2 ? 'one family member' : 'three family members'}.
-                </p>
-                <button
-                  className="room-code"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(game.code);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    } catch {
-                      setError('Your table code is ' + game.code);
-                    }
-                  }}
-                  aria-label="Copy table code"
-                >
-                  {game.code}
-                  <Copy size={20} />
-                </button>
-                <div className="seat-list">
-                  {Array.from({ length: game.capacity }, (_, i) => (
-                    <div key={i} className="lobby-seat">
-                      <span className="avatar">
-                        {game.players[i]?.name.charAt(0).toUpperCase() || '+'}
-                      </span>
-                      <span>
-                        <b>
-                          {game.players[i]?.name || 'Open seat'}
-                          {i === game.seat ? ' (you)' : ''}
-                        </b>
-                        <small>
-                          {game.capacity === 4 ? `Team ${i % 2 === 0 ? 'one' : 'two'} · ` : ''}Seat{' '}
-                          {i + 1}
-                          {i === 0 ? ' · Host' : ''}
-                        </small>
-                      </span>
-                      {game.players[i] && <Check size={18} />}
-                    </div>
-                  ))}
-                </div>
-                <p className="lobby-rules">
-                  Surs {game.rules.cancelSurs ? 'cancel' : 'accumulate'} ·{' '}
-                  {game.rules.surLimit === 50 ? 'Sur cutoff: 50' : 'No sur cutoff'}
-                </p>
-                <Button
-                  className="primary-action"
-                  onClick={() => act('start')}
-                  disabled={busy || game.players.length !== game.capacity || game.seat !== 0}
-                >
-                  {game.players.length !== game.capacity
-                    ? `Waiting for ${game.capacity - game.players.length} more…`
-                    : game.seat === 0
-                      ? 'Deal the cards'
-                      : 'Waiting for the host to deal'}
-                </Button>
-                <Button variant="outline" className="secondary-action" onClick={share}>
-                  <Share2 size={17} />
-                  Share invitation
-                </Button>
-              </div>
-            ) : (
-              <>
-                <div className="scoreboard">
-                  {[team(game.seat), 1 - team(game.seat)].map((t) => (
-                    <div className={'score-side ' + (t === team(game.seat) ? 'ours' : '')} key={t}>
-                      <span>
-                        {game.capacity === 4
-                          ? t === team(game.seat)
-                            ? 'Your team'
-                            : 'Other team'
-                          : teamName(t)}
-                      </span>
-                      <strong>
-                        {game.scores[t]}
-                        <small> / {game.rules.goal}</small>
-                      </strong>
-                      <span className="capture-stats">
-                        ♣ {game.captured[t].filter((c) => c[0] === 'C').length} collected ·{' '}
-                        {game.surs[t]} sur{game.surs[t] === 1 ? '' : 's'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                {game.phase === 'playing' ? (
-                  <>
-                    <div className="play-table">
-                      <div className="opponents">
-                        {game.players.map(
-                          (p, i) =>
-                            i !== game.seat && (
-                              <div
-                                key={i}
-                                className={'opponent ' + (i === game.turn ? 'turn' : '')}
-                              >
-                                <span className="avatar">{p.name.charAt(0).toUpperCase()}</span>
-                                <b>{p.name}</b>
-                                {game.capacity === 4 && (
-                                  <small>
-                                    {team(i) === team(game.seat) ? 'Partner' : 'Opponent'}
-                                  </small>
-                                )}
-                                <div
-                                  className="card-backs"
-                                  aria-label={p.handCount + ' hidden cards'}
-                                >
-                                  {Array.from({ length: p.handCount }, (_, j) => (
-                                    <span key={j} />
-                                  ))}
-                                </div>
-                              </div>
-                            ),
-                        )}
-                      </div>
-                      <div className="table-label">
-                        ROUND {game.round} <span>·</span> DEAL {game.deal} <span>·</span>{' '}
-                        {game.remaining === 0 ? 'FINAL DEAL' : game.remaining + ' IN DECK'}
-                      </div>
-                      <div className="pool" aria-label="Cards on the table">
-                        {game.pool.length ? (
-                          game.pool.map((c) => (
-                            <PlayingCard
-                              card={c}
-                              key={c}
-                              selected={take.includes(c)}
-                              disabled={!myTurn || !card || busy}
-                              onClick={() =>
-                                setTake((old) =>
-                                  old.includes(c) ? old.filter((x) => x !== c) : [...old, c],
-                                )
-                              }
-                            />
-                          ))
-                        ) : (
-                          <div className="empty-table">
-                            ♣<small>The table is clear</small>
-                          </div>
-                        )}
-                      </div>
-                      <p className="last-play" aria-live="polite">
-                        {game.message}
-                      </p>
-                    </div>
-                    <div className="your-hand">
-                      <div className="hand-heading">
-                        <span className={myTurn ? 'turn-label' : ''}>
-                          {myTurn ? 'Your turn' : `${game.players[game.turn].name}’s turn`}
+            <div
+              className={lost ? 'table-lost' : undefined}
+              aria-disabled={lost ? true : undefined}
+            >
+              {game.phase === 'lobby' ? (
+                <div className="lobby-panel">
+                  <div className="eyebrow">YOUR TABLE IS OPEN</div>
+                  <h1>Save a seat.</h1>
+                  <p>
+                    Share the invitation with{' '}
+                    {game.capacity === 2 ? 'one family member' : 'three family members'}.
+                  </p>
+                  <button
+                    className="room-code"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(game.code);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      } catch {
+                        setError('Your table code is ' + game.code);
+                      }
+                    }}
+                    aria-label="Copy table code"
+                  >
+                    {game.code}
+                    <Copy size={20} />
+                  </button>
+                  <div className="seat-list">
+                    {Array.from({ length: game.capacity }, (_, i) => (
+                      <div key={i} className="lobby-seat">
+                        <span className="avatar">
+                          {game.players[i]?.name.charAt(0).toUpperCase() || '+'}
                         </span>
-                        <small>{game.players[game.seat].name} · Your hand</small>
+                        <span>
+                          <b>
+                            {game.players[i]?.name || 'Open seat'}
+                            {i === game.seat ? ' (you)' : ''}
+                          </b>
+                          <small>
+                            {game.capacity === 4 ? `Team ${i % 2 === 0 ? 'one' : 'two'} · ` : ''}
+                            Seat {i + 1}
+                            {i === 0 ? ' · Host' : ''}
+                          </small>
+                        </span>
+                        {game.players[i] && <Check size={18} />}
                       </div>
-                      <div className="hand-cards">
-                        {game.players[game.seat].hand.map((c) => (
-                          <PlayingCard
-                            key={c}
-                            card={c}
-                            selected={card === c}
-                            disabled={!myTurn || busy}
-                            onClick={() => choose(c)}
-                          />
-                        ))}
+                    ))}
+                  </div>
+                  <p className="lobby-rules">
+                    Surs {game.rules.cancelSurs ? 'cancel' : 'accumulate'} ·{' '}
+                    {game.rules.surLimit === 50 ? 'Sur cutoff: 50' : 'No sur cutoff'}
+                  </p>
+                  <Button
+                    className="primary-action"
+                    onClick={() => act('start')}
+                    disabled={frozen || game.players.length !== game.capacity || game.seat !== 0}
+                  >
+                    {game.players.length !== game.capacity
+                      ? `Waiting for ${game.capacity - game.players.length} more…`
+                      : game.seat === 0
+                        ? 'Deal the cards'
+                        : 'Waiting for the host to deal'}
+                  </Button>
+                  <Button variant="outline" className="secondary-action" onClick={share}>
+                    <Share2 size={17} />
+                    Share invitation
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="scoreboard">
+                    {[team(game.seat), 1 - team(game.seat)].map((t) => (
+                      <div
+                        className={'score-side ' + (t === team(game.seat) ? 'ours' : '')}
+                        key={t}
+                      >
+                        <span>
+                          {game.capacity === 4
+                            ? t === team(game.seat)
+                              ? 'Your team'
+                              : 'Other team'
+                            : teamName(t)}
+                        </span>
+                        <strong>
+                          {game.scores[t]}
+                          <small> / {game.rules.goal}</small>
+                        </strong>
+                        <span className="capture-stats">
+                          ♣ {game.captured[t].filter((c) => c[0] === 'C').length} collected ·{' '}
+                          {game.surs[t]} sur{game.surs[t] === 1 ? '' : 's'}
+                        </span>
                       </div>
-                      <p className="move-hint">
-                        {!myTurn
-                          ? 'Your hand stays private.'
-                          : !card
-                            ? 'Choose a card to play.'
-                            : !legal.length
-                              ? 'No capture — this card stays on the table.'
-                              : legal.length > 1 && !valid
-                                ? 'Choose the table cards to capture.'
-                                : `${label(card)} takes ${take.map(label).join(' + ')}`}
-                      </p>
+                    ))}
+                  </div>
+                  {game.phase === 'playing' ? (
+                    <>
+                      <div className="play-table">
+                        <div className="opponents">
+                          {game.players.map(
+                            (p, i) =>
+                              i !== game.seat && (
+                                <div
+                                  key={i}
+                                  className={'opponent ' + (i === game.turn ? 'turn' : '')}
+                                >
+                                  <span className="avatar">{p.name.charAt(0).toUpperCase()}</span>
+                                  <b>{p.name}</b>
+                                  {game.capacity === 4 && (
+                                    <small>
+                                      {team(i) === team(game.seat) ? 'Partner' : 'Opponent'}
+                                    </small>
+                                  )}
+                                  <div
+                                    className="card-backs"
+                                    aria-label={p.handCount + ' hidden cards'}
+                                  >
+                                    {Array.from({ length: p.handCount }, (_, j) => (
+                                      <span key={j} />
+                                    ))}
+                                  </div>
+                                </div>
+                              ),
+                          )}
+                        </div>
+                        <div className="table-label">
+                          ROUND {game.round} <span>·</span> DEAL {game.deal} <span>·</span>{' '}
+                          {game.remaining === 0 ? 'FINAL DEAL' : game.remaining + ' IN DECK'}
+                        </div>
+                        <div className="pool" aria-label="Cards on the table">
+                          {game.pool.length ? (
+                            game.pool.map((c) => (
+                              <PlayingCard
+                                card={c}
+                                key={c}
+                                selected={take.includes(c)}
+                                disabled={!myTurn || !card || frozen}
+                                onClick={() =>
+                                  setTake((old) =>
+                                    old.includes(c) ? old.filter((x) => x !== c) : [...old, c],
+                                  )
+                                }
+                              />
+                            ))
+                          ) : (
+                            <div className="empty-table">
+                              ♣<small>The table is clear</small>
+                            </div>
+                          )}
+                        </div>
+                        <p className="last-play" aria-live="polite">
+                          {game.message}
+                        </p>
+                      </div>
+                      <div className="your-hand">
+                        <div className="hand-heading">
+                          <span className={myTurn ? 'turn-label' : ''}>
+                            {myTurn ? 'Your turn' : `${game.players[game.turn].name}’s turn`}
+                          </span>
+                          <small>{game.players[game.seat].name} · Your hand</small>
+                        </div>
+                        <div className="hand-cards">
+                          {game.players[game.seat].hand.map((c) => (
+                            <PlayingCard
+                              key={c}
+                              card={c}
+                              selected={card === c}
+                              disabled={!myTurn || frozen}
+                              onClick={() => choose(c)}
+                            />
+                          ))}
+                        </div>
+                        <p className="move-hint">
+                          {!myTurn
+                            ? 'Your hand stays private.'
+                            : !card
+                              ? 'Choose a card to play.'
+                              : !legal.length
+                                ? 'No capture — this card stays on the table.'
+                                : legal.length > 1 && !valid
+                                  ? 'Choose the table cards to capture.'
+                                  : `${label(card)} takes ${take.map(label).join(' + ')}`}
+                        </p>
+                        <Button
+                          className="primary-action"
+                          disabled={frozen || !myTurn || !valid}
+                          onClick={() => act('play', { card, take })}
+                        >
+                          {busy
+                            ? 'Playing…'
+                            : !myTurn
+                              ? 'Waiting for your turn'
+                              : card
+                                ? take.length
+                                  ? 'Capture cards'
+                                  : 'Play card'
+                                : 'Select a card'}
+                        </Button>
+                        {game.scores[team(game.seat)] +
+                          count(game.captured[team(game.seat)], game.surs[team(game.seat)]).total >=
+                          game.rules.goal && (
+                          <Button
+                            className="secondary-action"
+                            variant="outline"
+                            disabled={frozen}
+                            onClick={() => act('claim')}
+                          >
+                            Per shodam · Claim the game
+                          </Button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="round-result">
+                      <div className="eyebrow">
+                        {game.phase === 'finished' ? 'GAME COMPLETE' : 'CARDS COUNTED'}
+                      </div>
+                      <h1>
+                        {game.phase === 'finished'
+                          ? game.winner === team(game.seat)
+                            ? 'You win!'
+                            : 'Well played.'
+                          : `Round ${game.round}`}
+                      </h1>
+                      {game.phase === 'finished' && <p>{teamName(game.winner!)} won the game.</p>}
+                      <div className="score-table-wrap">
+                        <table className="score-table">
+                          <thead>
+                            <tr>
+                              <th>Points</th>
+                              <th>
+                                {game.capacity === 4 ? 'Your team' : game.players[game.seat].name}
+                              </th>
+                              <th>
+                                {game.capacity === 4
+                                  ? 'Other team'
+                                  : game.players[1 - game.seat].name}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(
+                              [
+                                'clubPoints',
+                                'aces',
+                                'jacks',
+                                'twoClubs',
+                                'tenDiamonds',
+                                'surs',
+                                'total',
+                              ] as const
+                            ).map((k) => (
+                              <tr key={k}>
+                                <th>
+                                  {
+                                    {
+                                      clubPoints: 'Seven clubs',
+                                      aces: 'Aces',
+                                      jacks: 'Jacks',
+                                      twoClubs: '2 ♣',
+                                      tenDiamonds: '10 ♦',
+                                      surs: 'Surs',
+                                      total: 'Round total',
+                                    }[k]
+                                  }
+                                </th>
+                                {[team(game.seat), 1 - team(game.seat)].map((t) => (
+                                  <td key={t}>{game.breakdown[t]?.[k] * (k === 'surs' ? 5 : 1)}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                       <Button
                         className="primary-action"
-                        disabled={busy || !myTurn || !valid}
-                        onClick={() => act('play', { card, take })}
+                        disabled={frozen}
+                        onClick={() => act(game.phase === 'finished' ? 'rematch' : 'start')}
                       >
-                        {busy
-                          ? 'Playing…'
-                          : !myTurn
-                            ? 'Waiting for your turn'
-                            : card
-                              ? take.length
-                                ? 'Capture cards'
-                                : 'Play card'
-                              : 'Select a card'}
+                        {game.phase === 'finished' ? 'Play again' : 'Deal next round'}
                       </Button>
-                      {game.scores[team(game.seat)] +
-                        count(game.captured[team(game.seat)], game.surs[team(game.seat)]).total >=
-                        game.rules.goal && (
-                        <Button
-                          className="secondary-action"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => act('claim')}
-                        >
-                          Per shodam · Claim the game
-                        </Button>
-                      )}
                     </div>
-                  </>
-                ) : (
-                  <div className="round-result">
-                    <div className="eyebrow">
-                      {game.phase === 'finished' ? 'GAME COMPLETE' : 'CARDS COUNTED'}
-                    </div>
-                    <h1>
-                      {game.phase === 'finished'
-                        ? game.winner === team(game.seat)
-                          ? 'You win!'
-                          : 'Well played.'
-                        : `Round ${game.round}`}
-                    </h1>
-                    {game.phase === 'finished' && <p>{teamName(game.winner!)} won the game.</p>}
-                    <div className="score-table-wrap">
-                      <table className="score-table">
-                        <thead>
-                          <tr>
-                            <th>Points</th>
-                            <th>
-                              {game.capacity === 4 ? 'Your team' : game.players[game.seat].name}
-                            </th>
-                            <th>
-                              {game.capacity === 4
-                                ? 'Other team'
-                                : game.players[1 - game.seat].name}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(
-                            [
-                              'clubPoints',
-                              'aces',
-                              'jacks',
-                              'twoClubs',
-                              'tenDiamonds',
-                              'surs',
-                              'total',
-                            ] as const
-                          ).map((k) => (
-                            <tr key={k}>
-                              <th>
-                                {
-                                  {
-                                    clubPoints: 'Seven clubs',
-                                    aces: 'Aces',
-                                    jacks: 'Jacks',
-                                    twoClubs: '2 ♣',
-                                    tenDiamonds: '10 ♦',
-                                    surs: 'Surs',
-                                    total: 'Round total',
-                                  }[k]
-                                }
-                              </th>
-                              {[team(game.seat), 1 - team(game.seat)].map((t) => (
-                                <td key={t}>{game.breakdown[t]?.[k] * (k === 'surs' ? 5 : 1)}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <Button
-                      className="primary-action"
-                      disabled={busy}
-                      onClick={() => act(game.phase === 'finished' ? 'rematch' : 'start')}
-                    >
-                      {game.phase === 'finished' ? 'Play again' : 'Deal next round'}
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
+                  )}
+                </>
+              )}
+            </div>
             <footer className="table-footer">
               <LockKeyhole size={13} />
               Invitation-only table · {game.code}
