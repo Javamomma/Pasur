@@ -99,6 +99,12 @@ export default function localTable(): Plugin {
               })),
             );
           if (req.method !== 'POST') return json(res, { error: 'Not found' }, 404);
+          // A web page on another site must not drive these routes (a form POST is a "simple" request).
+          const origin = req.headers.origin;
+          if (origin !== undefined && origin !== 'http://' + req.headers.host)
+            return json(res, { error: 'Foreign origin' }, 403);
+          if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] || ''))
+            return json(res, { error: 'Content-Type must be application/json' }, 415);
           let b: Record<string, unknown> = {};
           try {
             b = JSON.parse((await readBody(req)).toString() || '{}');
