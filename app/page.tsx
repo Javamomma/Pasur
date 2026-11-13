@@ -244,6 +244,7 @@ export default function Home() {
       phase: () => current.current?.phase ?? 'lobby',
       isHidden: () => document.hidden,
       onPause: () => !stopped && setPaused(true),
+      onResume: () => !stopped && setPaused(false),
       poll: async () => {
         const r = await getTable(game.code, ctl.signal);
         if (stopped || r.kind === 'cancelled') return;

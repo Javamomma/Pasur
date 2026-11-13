@@ -28,6 +28,8 @@ export function createPoller(o: {
   phase: () => string;
   timing?: Timing;
   onPause: () => void;
+  /** The poller left the paused state on its own (a new revision arrived). */
+  onResume?: () => void;
   isHidden?: () => boolean;
   now?: () => number;
 }) {
@@ -77,6 +79,9 @@ export function createPoller(o: {
   };
   async function tick() {
     if (stopped) return;
+    // Never decide to pause while a poll is in flight: whatever started it schedules the next
+    // tick, and that tick decides once the reply (and any new revision) has been seen.
+    if (inFlight) return;
     if (shouldPause(lastChange, now(), timing)) {
       paused = true;
       o.onPause();
@@ -101,6 +106,12 @@ export function createPoller(o: {
     /** The table changed (new revision): restart the idle clock. */
     noteChange() {
       lastChange = now();
+      // A new revision proves the table is alive: leave a pause that raced with the poll.
+      if (paused && running && !stopped) {
+        paused = false;
+        o.onResume?.();
+        schedule();
+      }
     },
     /** The phase changed: restart the wait so a slow lobby delay does not outlast a fast playing one. */
     reschedule() {
@@ -121,6 +132,7 @@ export function createPoller(o: {
         this.resume();
         return chain;
       }
+      clearTimeout(timer); // the timer scheduled earlier must not fire (and pause) during this poll
       return run().then(schedule);
     },
   };

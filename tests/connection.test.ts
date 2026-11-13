@@ -388,3 +388,66 @@ test('classifyFailure: honest messages, and which failures stop polling', () => 
   ])
     assert.deepEqual(classifyFailure(r), { ...interrupted, gone: false });
 });
+
+test('kick near the idle deadline: the old timer cannot pause during the kicked poll, and its new revision keeps polling', async (t) => {
+  const c = clock(t);
+  let polls = 0;
+  let paused = 0;
+  let release!: () => void;
+  let hold = false;
+  let p!: ReturnType<typeof createPoller>;
+  p = createPoller({
+    poll: async () => {
+      polls++;
+      if (hold) await new Promise<void>((r) => (release = r));
+    },
+    phase: () => 'lobby', // 30 ms between polls
+    timing: fast,
+    onPause: () => paused++,
+  });
+  p.start();
+  await c.advance(100); // polls at 30, 60, 90; next timer at 120 = the idle deadline
+  hold = true;
+  const before = polls;
+  void p.kick();
+  await settle();
+  assert.equal(polls, before + 1, 'kicked poll is in flight');
+  await c.advance(60); // the old timer would have fired at 120 and paused
+  assert.equal(paused, 0, 'no pause while the kicked poll is in flight');
+  hold = false;
+  p.noteChange(); // the kicked reply brought a new revision
+  release();
+  await settle();
+  await c.advance(100);
+  assert.equal(paused, 0);
+  assert.equal(p.isPaused(), false);
+  assert.ok(polls > before + 2, 'polling continues');
+  p.stop();
+});
+
+test('a new revision that arrives after the pause un-pauses and reschedules', async (t) => {
+  const c = clock(t);
+  let polls = 0;
+  let paused = 0;
+  let resumed = 0;
+  const p = createPoller({
+    poll: async () => {
+      polls++;
+    },
+    phase: () => 'playing',
+    timing: fast,
+    onPause: () => paused++,
+    onResume: () => resumed++,
+  });
+  p.start();
+  await c.advance(130);
+  assert.equal(p.isPaused(), true);
+  const atPause = polls;
+  p.noteChange();
+  assert.equal(p.isPaused(), false);
+  assert.equal(resumed, 1);
+  await c.advance(25);
+  assert.ok(polls > atPause, 'polling is scheduled again');
+  assert.equal(paused, 1);
+  p.stop();
+});
