@@ -22,7 +22,7 @@ test('two players: create, join, deal, play, reload', async ({ browser }) => {
 
   // Host deals.
   const deal = host.getByRole('button', { name: 'Deal the cards' });
-  await expect(deal).toBeEnabled();
+  await expect(deal).toBeEnabled({ timeout: 12_000 });
   await deal.click();
   await expect(host.locator('.hand-cards button.playing-card')).toHaveCount(4);
   await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4);

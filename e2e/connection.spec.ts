@@ -92,3 +92,64 @@ test('polling pauses after 10 quiet minutes and a tap resumes it', async ({ brow
     .toBeGreaterThan(resumed);
   expect(code).toMatch(/^[A-Z2-9]{10}$/);
 });
+
+test('an old timed-out submission cannot free the button of a newer pending Create', async ({
+  browser,
+}) => {
+  const host = await (await browser.newContext()).newPage();
+  const guest = await (await browser.newContext()).newPage();
+  await host.goto('/');
+  await host.getByPlaceholder('Name at the table').fill('Hosty');
+  await host.getByRole('button', { name: /Create private table/ }).click();
+  const code = (await host.getByRole('button', { name: 'Copy table code' }).innerText()).trim();
+  await guest.goto(`/?table=${code}`);
+  await guest.getByPlaceholder('Name at the table').fill('Guesty');
+  await guest.getByRole('button', { name: 'Join table' }).click();
+  await expect(guest.getByText('Waiting for the host to deal')).toBeVisible();
+
+  let releaseCreate!: () => void;
+  const createHeld = new Promise<void>((r) => (releaseCreate = r));
+  await host.route('**/api/game', async (route) => {
+    const req = route.request();
+    const action = req.method() === 'POST' ? req.postDataJSON()?.action : '';
+    if (action === 'start') return new Promise(() => {}); // the deal never answers
+    if (action === 'create') await createHeld;
+    return route.continue();
+  });
+
+  await host.getByRole('button', { name: 'Deal the cards' }).click();
+  await host.waitForTimeout(6_000); // the deal would time out at 10 s
+  await host.getByRole('button', { name: 'Pasur home' }).click();
+  await host.getByRole('button', { name: /Create private table/ }).click();
+  const pending = host.getByRole('button', { name: 'Setting the table…' });
+  await expect(pending).toBeDisabled();
+  // Past the old deal's 10-second limit (but inside the Create's own) the button stays locked.
+  await host.waitForTimeout(6_000);
+  await expect(pending).toBeDisabled();
+  releaseCreate();
+  await expect(host.getByRole('button', { name: 'Copy table code' })).toBeVisible();
+  await expect(host.getByRole('button', { name: 'Copy table code' })).not.toHaveText(code);
+});
+
+test('a join that times out says so and frees the button; it is never re-sent', async ({
+  browser,
+}) => {
+  const host = await (await browser.newContext()).newPage();
+  const guest = await (await browser.newContext()).newPage();
+  await host.goto('/');
+  await host.getByPlaceholder('Name at the table').fill('Hosty');
+  await host.getByRole('button', { name: /Create private table/ }).click();
+  const code = (await host.getByRole('button', { name: 'Copy table code' }).innerText()).trim();
+  await post(host, 'hold', { ms: 20000, count: 1, action: 'join' });
+  let joins = 0;
+  guest.on('request', (r) => {
+    if (r.method() === 'POST' && r.postDataJSON()?.action === 'join') joins++;
+  });
+  await guest.goto(`/?table=${code}`);
+  await guest.getByPlaceholder('Name at the table').fill('Guesty');
+  await guest.getByRole('button', { name: 'Join table' }).click();
+  await expect(guest.getByText('Not sure that went through')).toBeVisible({ timeout: 14_000 });
+  await expect(guest.getByRole('button', { name: 'Join table' })).toBeEnabled();
+  await guest.waitForTimeout(3_000);
+  expect(joins).toBe(1);
+});

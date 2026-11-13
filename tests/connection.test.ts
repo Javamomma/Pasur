@@ -1,9 +1,34 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { TIMING, pollDelay, shouldPause, createPoller } from '../lib/connection.ts';
+import {
+  TIMING,
+  pollDelay,
+  shouldPause,
+  createPoller,
+  acceptReply,
+  submitMove,
+  request,
+  classifyFailure,
+  isGameView,
+} from '../lib/connection.ts';
 
+// No wall-clock waits: timers and Date are mocked, promises are flushed explicitly.
 const fast = { playingMs: 10, idleMs: 30, pauseAfterMs: 120, requestTimeoutMs: 50 };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const settle = async () => {
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+};
+const clock = (t: TestContext) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  return {
+    /** Advance `ms` in `step` slices, letting promise chains run between slices. */
+    async advance(ms: number, step = 1) {
+      for (let done = 0; done < ms; done += step) {
+        t.mock.timers.tick(step);
+        await settle();
+      }
+    },
+  };
+};
 
 test('timing constants match the plan', () => {
   assert.deepEqual(TIMING, {
@@ -24,41 +49,88 @@ test('pause only after the idle limit', () => {
   assert.equal(shouldPause(0, 600_000, TIMING), true);
 });
 
-test('poller follows the phase, pauses when idle, resumes on demand', async () => {
+test('poller delay follows the phase', async (t) => {
+  const c = clock(t);
   let phase = 'playing';
   let polls = 0;
-  let paused = 0;
   const p = createPoller({
     poll: async () => {
       polls++;
     },
     phase: () => phase,
     timing: fast,
+    onPause: () => {},
+  });
+  p.start();
+  await c.advance(9);
+  assert.equal(polls, 0);
+  await c.advance(1);
+  assert.equal(polls, 1);
+  phase = 'lobby';
+  await c.advance(10); // the wait already scheduled was a playing one
+  assert.equal(polls, 2);
+  await c.advance(29);
+  assert.equal(polls, 2);
+  await c.advance(1);
+  assert.equal(polls, 3);
+  p.stop();
+});
+
+test('reschedule restarts the wait when the phase changes', async (t) => {
+  const c = clock(t);
+  let phase = 'lobby';
+  let polls = 0;
+  const p = createPoller({
+    poll: async () => {
+      polls++;
+    },
+    phase: () => phase,
+    timing: fast,
+    onPause: () => {},
+  });
+  p.start();
+  await c.advance(5);
+  phase = 'playing';
+  p.reschedule();
+  await c.advance(10);
+  assert.equal(polls, 1);
+  p.stop();
+});
+
+test('pauses after the idle limit, polls nothing while paused, resumes on demand', async (t) => {
+  const c = clock(t);
+  let polls = 0;
+  let paused = 0;
+  const p = createPoller({
+    poll: async () => {
+      polls++;
+    },
+    phase: () => 'playing',
+    timing: fast,
     onPause: () => paused++,
   });
   p.start();
-  await sleep(55);
-  const playingPolls = polls;
-  assert.ok(playingPolls >= 3, `expected several fast polls, got ${playingPolls}`);
-  phase = 'lobby';
-  await sleep(40); // let the next scheduled delay switch over
-  const before = polls;
-  await sleep(90);
-  assert.ok(polls - before <= 4, `lobby polls should be slower, got ${polls - before}`);
-  await sleep(150);
+  await c.advance(115);
+  assert.equal(paused, 0);
+  await c.advance(15);
   assert.equal(paused, 1);
   assert.equal(p.isPaused(), true);
   const atPause = polls;
-  await sleep(100);
-  assert.equal(polls, atPause, 'no polls while paused');
+  await c.advance(1000, 10);
+  assert.equal(polls, atPause);
   p.resume();
-  await sleep(5);
-  assert.ok(polls > atPause, 'resume polls immediately');
+  await settle();
+  assert.equal(polls, atPause + 1, 'resume polls immediately');
+  assert.equal(p.isPaused(), false);
+  await c.advance(10);
+  assert.equal(polls, atPause + 2, 'the schedule continues');
+  await c.advance(100); // idle clock was reset: not paused yet
   assert.equal(p.isPaused(), false);
   p.stop();
 });
 
-test('a revision change resets the idle clock', async () => {
+test('a revision change resets the idle clock', async (t) => {
+  const c = clock(t);
   let paused = 0;
   const p = createPoller({
     poll: async () => {},
@@ -67,25 +139,27 @@ test('a revision change resets the idle clock', async () => {
     onPause: () => paused++,
   });
   p.start();
-  for (let i = 0; i < 4; i++) {
-    await sleep(60);
+  for (let i = 0; i < 6; i++) {
+    await c.advance(100);
     p.noteChange();
   }
   assert.equal(paused, 0);
   p.stop();
 });
 
-test('never two polls in flight, hidden tabs skip, stop ends the schedule', async () => {
+test('never two polls in flight; hidden tabs skip; stop ends the schedule', async (t) => {
+  const c = clock(t);
   let running = 0,
     max = 0,
     polls = 0,
     hidden = true;
+  let release: () => void = () => {};
   const p = createPoller({
     poll: async () => {
       running++;
       max = Math.max(max, running);
       polls++;
-      await sleep(25);
+      await new Promise<void>((r) => (release = r));
       running--;
     },
     phase: () => 'playing',
@@ -94,21 +168,28 @@ test('never two polls in flight, hidden tabs skip, stop ends the schedule', asyn
     isHidden: () => hidden,
   });
   p.start();
-  await sleep(50);
+  await c.advance(50);
   assert.equal(polls, 0, 'hidden: no polls');
   hidden = false;
-  p.kick();
-  p.kick();
-  await sleep(100);
-  assert.ok(polls > 0);
+  void p.kick();
+  void p.kick();
+  void p.kick();
+  await settle();
+  assert.equal(polls, 1);
   assert.equal(max, 1);
+  release();
+  await settle();
+  assert.equal(polls, 2, 'the queued kick runs once after the first poll');
+  release();
+  await settle();
   p.stop();
   const n = polls;
-  await sleep(60);
+  await c.advance(100);
   assert.equal(polls, n);
 });
 
-test('a poll that asks to stop ends the schedule', async () => {
+test('a poll that asks to stop ends the schedule', async (t) => {
+  const c = clock(t);
   let polls = 0;
   const p = createPoller({
     poll: async () => {
@@ -120,53 +201,49 @@ test('a poll that asks to stop ends the schedule', async () => {
     onPause: () => {},
   });
   p.start();
-  await sleep(80);
+  await c.advance(100);
   assert.equal(polls, 1);
   p.stop();
 });
 
-test('acceptReply: an older reply never replaces a newer table', async () => {
-  const { acceptReply } = await import('../lib/connection.ts');
+test('acceptReply: an older reply never replaces a newer table', () => {
   const t = (code: string, revision: number) => ({ code, revision });
   let state: { code: string; revision: number } | null = null;
   const deliver = (incoming: { code: string; revision: number }, switchTable = false) => {
     if (acceptReply(state, incoming, { switchTable })) state = incoming;
   };
-  deliver(t('AAAAAAAAAA', 5), true); // initial load
+  deliver(t('AAAAAAAAAA', 5), true);
   deliver(t('AAAAAAAAAA', 7));
-  deliver(t('AAAAAAAAAA', 6)); // late reply
+  deliver(t('AAAAAAAAAA', 6));
   assert.equal(state!.revision, 7);
-  deliver(t('AAAAAAAAAA', 7)); // same revision: nothing new
+  deliver(t('AAAAAAAAAA', 7));
   assert.equal(state!.revision, 7);
-  deliver(t('BBBBBBBBBB', 99)); // another table, not deliberate
+  deliver(t('BBBBBBBBBB', 99));
   assert.deepEqual(state, t('AAAAAAAAAA', 7));
-  deliver(t('BBBBBBBBBB', 1), true); // create / join / back-to-table
+  deliver(t('BBBBBBBBBB', 1), true);
   assert.deepEqual(state, t('BBBBBBBBBB', 1));
   assert.equal(acceptReply(null, t('CCCCCCCCCC', 3), { switchTable: false }), true);
 });
 
-test('a move that times out is sent once, then checked once, never re-sent', async () => {
-  const { submitMove, request } = await import('../lib/connection.ts');
+const hang = ((_: string, init?: RequestInit) =>
+  new Promise<Response>((_res, rej) =>
+    init?.signal?.addEventListener('abort', () => rej(new DOMException('x', 'AbortError'))),
+  )) as unknown as typeof fetch;
+const game = (revision: number) =>
+  new Response(JSON.stringify({ code: 'AAAAAAAAAA', revision }), { status: 200 });
+
+test('a move that times out is sent once, then checked once, never re-sent', async (t) => {
+  const c = clock(t);
   const calls: string[] = [];
-  const fakeFetch = (async (url: string, init?: RequestInit) => {
+  const fakeFetch = ((url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     calls.push(method);
-    if (method === 'POST') {
-      // never answers, but honours the abort signal
-      return new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener('abort', () =>
-          reject(new DOMException('aborted', 'AbortError')),
-        );
-      });
-    }
-    return new Response(JSON.stringify({ code: 'AAAAAAAAAA', revision: 8 }), { status: 200 });
+    return method === 'POST' ? hang(url, init) : Promise.resolve(game(8));
   }) as unknown as typeof fetch;
-
   let uncertain = 0;
   let checked: unknown = null;
   const timing = { ...fast, requestTimeoutMs: 30 };
-  const started = Date.now();
-  const out = await submitMove(
+  const done = submitMove(
     fakeFetch,
     { url: '/api/game', init: { method: 'POST', body: '{}' } },
     timing,
@@ -177,25 +254,80 @@ test('a move that times out is sent once, then checked once, never re-sent', asy
       },
     },
   );
+  await settle();
+  assert.deepEqual(calls, ['POST']);
+  await c.advance(30);
+  const out = await done;
   assert.equal(out.outcome, 'uncertain');
   assert.equal(uncertain, 1);
   assert.deepEqual(calls, ['POST', 'GET']);
-  assert.ok(Date.now() - started < 1000);
   assert.equal((checked as { kind: string }).kind, 'reply');
 });
 
-test('a slow poll is abandoned after the limit and reported as failed', async () => {
-  const { request } = await import('../lib/connection.ts');
-  const hang = ((_: string, init?: RequestInit) =>
-    new Promise<Response>((_res, rej) =>
-      init?.signal?.addEventListener('abort', () => rej(new DOMException('x', 'AbortError'))),
-    )) as unknown as typeof fetch;
-  const r = await request(hang, '/api/game?code=A', {}, { ...fast, requestTimeoutMs: 20 });
-  assert.equal(r.kind, 'failed');
+test('a slow poll is abandoned after the limit and reported as failed', async (t) => {
+  const c = clock(t);
+  const r = request(hang, '/api/game?code=A', {}, { ...fast, requestTimeoutMs: 20 });
+  await c.advance(20);
+  assert.equal((await r).kind, 'failed');
 });
 
-test('classifyFailure: honest messages, and which failures stop polling', async () => {
-  const { classifyFailure } = await import('../lib/connection.ts');
+test('a cancelled request is neither failed nor uncertain', async () => {
+  const ctl = new AbortController();
+  const r = request(hang, '/api/game?code=A', {}, TIMING, ctl.signal);
+  ctl.abort();
+  assert.equal((await r).kind, 'cancelled');
+  assert.equal((await request(hang, '/x', {}, TIMING, ctl.signal)).kind, 'cancelled');
+  let uncertain = 0;
+  const ctl2 = new AbortController();
+  const m = submitMove(
+    hang,
+    { url: '/api/game', init: { method: 'POST' } },
+    TIMING,
+    { onUncertain: () => uncertain++, check: async () => assert.fail('no check') },
+    ctl2.signal,
+  );
+  ctl2.abort();
+  assert.equal((await m).outcome, 'cancelled');
+  assert.equal(uncertain, 0);
+});
+
+test('an OK reply that is not a table is a failure, and a POST of that kind is uncertain', async () => {
+  const html = (async () =>
+    new Response('<!doctype html>', { status: 200 })) as unknown as typeof fetch;
+  assert.equal((await request(html, '/api/game?code=A', {})).kind, 'failed');
+  let uncertain = 0;
+  let checks = 0;
+  const m = await submitMove(html, { url: '/api/game', init: { method: 'POST' } }, TIMING, {
+    onUncertain: () => uncertain++,
+    check: async () => {
+      checks++;
+    },
+  });
+  assert.equal(m.outcome, 'uncertain');
+  assert.deepEqual([uncertain, checks], [1, 1]);
+  const err = (async () =>
+    new Response('{"error":"No"}', { status: 403 })) as unknown as typeof fetch;
+  const r = await request(err, '/x', {});
+  assert.equal(r.kind === 'reply' && r.status, 403);
+});
+
+test('isGameView', () => {
+  assert.equal(isGameView({ code: 'A', revision: 1 }), true);
+  for (const bad of [
+    null,
+    undefined,
+    '',
+    'x',
+    [],
+    {},
+    { code: 'A' },
+    { code: 1, revision: 1 },
+    { code: 'A', revision: NaN },
+  ])
+    assert.equal(isGameView(bad), false);
+});
+
+test('classifyFailure: honest messages, and which failures stop polling', () => {
   const reply = (status: number, data: unknown) => ({
     kind: 'reply' as const,
     ok: status < 400,

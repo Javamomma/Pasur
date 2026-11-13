@@ -68,6 +68,7 @@ function PlayingCard({
 const UNSURE = 'Not sure that went through — checking the table…';
 const UNSURE_NO_TABLE = 'Not sure that went through. Check your connection and try again.';
 class UncertainMove extends Error {}
+class CancelledMove extends Error {}
 export default function Home() {
   const [name, setName] = useState(''),
     [code, setCode] = useState(''),
@@ -93,7 +94,10 @@ export default function Home() {
   const navGen = useRef(0);
   // Every navigation (restore, create, join, home, join screen) takes a new generation;
   // an async result may be applied only while its generation is still the latest.
+  const subId = useRef(0); // only the latest submission may touch busy / notice / error
+  const subCtl = useRef<AbortController | null>(null);
   const beginNav = () => {
+    subCtl.current?.abort(); // leaving: outstanding submissions and their checks stop
     setRestoring(false);
     return ++navGen.current;
   };
@@ -115,11 +119,24 @@ export default function Home() {
     if (localStorage.getItem('pasur-last-table') === c) localStorage.removeItem('pasur-last-table');
     setLastCode((l) => (l === c ? '' : l));
   }
-  const getTable = (c: string) =>
-    request(fetch, '/api/game?code=' + encodeURIComponent(c), { cache: 'no-store' }, TIMING);
+  const getTable = (c: string, signal?: AbortSignal) =>
+    request(
+      fetch,
+      '/api/game?code=' + encodeURIComponent(c),
+      { cache: 'no-store' },
+      TIMING,
+      signal,
+    );
   async function send(action: string, extra: Record<string, unknown> = {}) {
     const deliberate = action === 'create' || action === 'join';
     const gen = deliberate ? beginNav() : navGen.current;
+    const id = ++subId.current;
+    const mine = () => subId.current === id;
+    subCtl.current?.abort();
+    const ctl = (subCtl.current = new AbortController());
+    // The table this move is FOR (a create has none yet, so it cannot be checked).
+    const sentCode = action === 'create' ? '' : current.current?.code || code;
+    const onTable = !!current.current;
     setBusy(true);
     setError('');
     try {
@@ -132,7 +149,7 @@ export default function Home() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action,
-              code: current.current?.code || code,
+              code: sentCode,
               name,
               capacity: Number(capacity),
               goal: Number(goal),
@@ -145,24 +162,39 @@ export default function Home() {
         },
         TIMING,
         {
-          // The move may or may not have reached the server. Never re-send it: look once.
+          // The move may or may not have reached the server. Never re-send it: look once,
+          // at the table it was for.
           onUncertain: () => {
+            if (!mine()) return;
             setBusy(false);
-            if (current.current) setNotice(UNSURE);
-            else setError(UNSURE_NO_TABLE);
+            if (!sentCode) setError(UNSURE_NO_TABLE);
+            else if (onTable) setNotice(UNSURE);
+            else setError(UNSURE);
           },
           check: async () => {
+            if (!sentCode) return;
             // Keep the notice readable for a moment even when the check is instant.
-            await Promise.all([pollerRef.current?.kick(), new Promise((r) => setTimeout(r, 2000))]);
+            const [r] = await Promise.all([
+              getTable(sentCode, ctl.signal),
+              new Promise((res) => setTimeout(res, 2000)),
+            ]);
+            if (r.kind === 'cancelled') return;
+            // A 200 for a timed-out join means the join landed: show it (a deliberate switch).
+            const landed = r.kind === 'reply' && r.ok && isLatest(gen);
+            if (landed) accept(r.data as GameView, action === 'join');
+            if (!mine()) return;
             setNotice((n) => (n === UNSURE ? '' : n));
+            setError((e) => (e !== UNSURE ? e : landed ? '' : UNSURE_NO_TABLE));
           },
         },
+        ctl.signal,
       );
+      if (out.outcome === 'cancelled') throw new CancelledMove();
       if (out.outcome === 'uncertain') throw new UncertainMove();
       const { ok, status, data } = out.reply;
       if (status === 409 && (action === 'start' || action === 'rematch') && current.current) {
         // Someone else already dealt: show the table as it is now, no error banner.
-        const fresh = await getTable(current.current.code);
+        const fresh = await getTable(current.current.code, ctl.signal);
         if (fresh.kind === 'reply' && fresh.ok) {
           if (isLatest(gen)) accept(fresh.data as GameView);
           return fresh.data as GameView;
@@ -176,10 +208,11 @@ export default function Home() {
       localStorage.setItem('pasur-name', name);
       return data as GameView;
     } catch (e) {
-      if (!(e instanceof UncertainMove)) setError((e as Error).message);
+      if (!(e instanceof UncertainMove) && !(e instanceof CancelledMove) && mine())
+        setError((e as Error).message);
       throw e;
     } finally {
-      setBusy(false);
+      if (mine()) setBusy(false);
     }
   }
   const act = (a: string, x: Record<string, unknown> = {}) => {
@@ -202,13 +235,14 @@ export default function Home() {
   useEffect(() => {
     if (screen !== 'table' || !game) return;
     let stopped = false;
+    const ctl = new AbortController();
     const poller = createPoller({
       phase: () => current.current?.phase ?? 'lobby',
       isHidden: () => document.hidden,
       onPause: () => !stopped && setPaused(true),
       poll: async () => {
-        const r = await getTable(game.code);
-        if (stopped) return;
+        const r = await getTable(game.code, ctl.signal);
+        if (stopped || r.kind === 'cancelled') return;
         if (r.kind === 'reply' && r.ok) {
           setNotice((n) => (n === UNSURE ? n : ''));
           setGame((old) => (acceptReply(old, r.data, { switchTable: false }) ? r.data : old));
@@ -228,21 +262,25 @@ export default function Home() {
       poller.kick();
     };
     const onVisible = () => !document.hidden && wake();
+    // A tap resumes only a paused table; during play it must not trigger polls.
+    const onTap = () => poller.isPaused() && wake();
     window.addEventListener('online', wake);
     document.addEventListener('visibilitychange', onVisible);
-    document.addEventListener('click', wake, true);
+    document.addEventListener('click', onTap, true);
     poller.start();
     return () => {
       stopped = true;
+      ctl.abort();
       poller.stop();
       pollerRef.current = null;
       setPaused(false);
       setLost(null);
       window.removeEventListener('online', wake);
       document.removeEventListener('visibilitychange', onVisible);
-      document.removeEventListener('click', wake, true);
+      document.removeEventListener('click', onTap, true);
     };
   }, [screen, game?.code]);
+  useEffect(() => () => subCtl.current?.abort(), []);
   useEffect(() => {
     pollerRef.current?.noteChange();
   }, [game?.revision]);
@@ -338,7 +376,7 @@ export default function Home() {
     const r = await getTable(knownCode);
     if (isLatest(gen)) {
       if (r.kind === 'reply' && r.ok) accept(r.data as GameView, true);
-      else {
+      else if (r.kind !== 'cancelled') {
         const f = classifyFailure(r);
         if (f.gone) forgetTable(knownCode);
         setError(f.stopPolling ? f.message : 'Connection interrupted. Try again.');
