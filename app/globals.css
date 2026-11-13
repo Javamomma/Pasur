@@ -1,6 +1,13 @@
-@import 'tailwindcss';
+@import 'tailwindcss' source(none);
 @import 'tw-animate-css';
 @import '../vendor/shadcn-tailwind-4.13.0.css';
+
+/* Tailwind reads only the source, not the Markdown docs (their words would add dead rules). */
+@source '../app';
+@source '../components';
+@source '../lib';
+@source '../main.tsx';
+@source '../index.html';
 :root {
   --background: #0e302b;
   --foreground: #f4f1e8;
