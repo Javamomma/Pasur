@@ -11,6 +11,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { createPoller } from '@/lib/connection';
 import { label, rank, options, team, count, suitSymbols, type GameView } from '@/lib/pasur';
 import {
   Share2,
@@ -73,7 +74,9 @@ export default function Home() {
     [take, setTake] = useState<string[]>([]),
     [copied, setCopied] = useState(false),
     [lastCode, setLastCode] = useState(''),
-    [restoring, setRestoring] = useState(false);
+    [restoring, setRestoring] = useState(false),
+    [paused, setPaused] = useState(false);
+  const pollerRef = useRef<ReturnType<typeof createPoller> | null>(null);
   const current = useRef<GameView | null>(null);
   current.current = game;
   const navGen = useRef(0);
@@ -162,35 +165,48 @@ export default function Home() {
   }, []);
   useEffect(() => {
     if (screen !== 'table' || !game) return;
-    let stopped = false,
-      inFlight = false;
-    const poll = async () => {
-      if (inFlight || document.hidden) return;
-      inFlight = true;
-      try {
-        const r = await fetch('/api/game?code=' + game.code, { cache: 'no-store' });
-        const d = (await r.json()) as GameView & { error?: string };
-        if (!r.ok) throw Error(d.error);
-        if (!stopped) {
-          setNotice('');
-          setGame((old) => (!old || d.revision > old.revision ? d : old));
+    let stopped = false;
+    const poller = createPoller({
+      phase: () => current.current?.phase ?? 'lobby',
+      isHidden: () => document.hidden,
+      onPause: () => !stopped && setPaused(true),
+      poll: async () => {
+        try {
+          const r = await fetch('/api/game?code=' + game.code, { cache: 'no-store' });
+          const d = (await r.json()) as GameView & { error?: string };
+          if (!r.ok) throw Error(d.error);
+          if (!stopped) {
+            setNotice('');
+            setGame((old) => (!old || d.revision > old.revision ? d : old));
+          }
+        } catch {
+          if (!stopped) setNotice('Connection interrupted. Reconnecting…');
         }
-      } catch {
-        if (!stopped) setNotice('Connection interrupted. Reconnecting…');
-      } finally {
-        inFlight = false;
-      }
+      },
+    });
+    pollerRef.current = poller;
+    const wake = () => {
+      setPaused(false);
+      poller.kick();
     };
-    const timer = setInterval(poll, 1500);
-    window.addEventListener('online', poll);
-    document.addEventListener('visibilitychange', poll);
+    const onVisible = () => !document.hidden && wake();
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', onVisible);
+    document.addEventListener('click', wake, true);
+    poller.start();
     return () => {
       stopped = true;
-      clearInterval(timer);
-      window.removeEventListener('online', poll);
-      document.removeEventListener('visibilitychange', poll);
+      poller.stop();
+      pollerRef.current = null;
+      setPaused(false);
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener('click', wake, true);
     };
   }, [screen, game?.code]);
+  useEffect(() => {
+    pollerRef.current?.noteChange();
+  }, [game?.revision]);
   useEffect(() => {
     setCard('');
     setTake([]);
@@ -371,7 +387,12 @@ export default function Home() {
           </button>
         </div>
       )}
-      {notice && screen === 'table' && (
+      {paused && screen === 'table' && (
+        <button type="button" className="connection" onClick={() => pollerRef.current?.resume()}>
+          Paused while nobody is playing. Tap to reconnect.
+        </button>
+      )}
+      {!paused && notice && screen === 'table' && (
         <div className="connection" role="status">
           {notice}
         </div>

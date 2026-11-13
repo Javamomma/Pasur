@@ -789,3 +789,10 @@ h2 {
     transition: none !important;
   }
 }
+button.connection {
+  width: calc(100% - 32px);
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
