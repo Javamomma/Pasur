@@ -54,6 +54,8 @@ test('a seat lost on the server says so, with a way home, and never Reconnecting
   expect(await cards.count()).toBe(4);
   for (let i = 0; i < 4; i++) await expect(cards.nth(i)).toBeDisabled();
   await expect(guest.locator('.primary-action')).toBeDisabled();
+  await expect(guest.locator('.primary-action')).toHaveText('Table unavailable');
+  await expect(guest.getByText('Not at this table', { exact: true })).toBeVisible();
   await expect(guest.locator('[aria-disabled="true"]')).toBeVisible();
   await expect(guest.getByRole('button', { name: /Tables/ })).toBeEnabled();
   await expect(guest.getByRole('button', { name: /Invite/ })).toBeEnabled();

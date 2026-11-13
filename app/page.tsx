@@ -820,7 +820,11 @@ export default function Home() {
                       <div className="your-hand">
                         <div className="hand-heading">
                           <span className={myTurn ? 'turn-label' : ''}>
-                            {myTurn ? 'Your turn' : `${game.players[game.turn].name}’s turn`}
+                            {lost
+                              ? 'Not at this table'
+                              : myTurn
+                                ? 'Your turn'
+                                : `${game.players[game.turn].name}’s turn`}
                           </span>
                           <small>{game.players[game.seat].name} · Your hand</small>
                         </div>
@@ -853,13 +857,15 @@ export default function Home() {
                         >
                           {busy
                             ? 'Playing…'
-                            : !myTurn
-                              ? 'Waiting for your turn'
-                              : card
-                                ? take.length
-                                  ? 'Capture cards'
-                                  : 'Play card'
-                                : 'Select a card'}
+                            : lost
+                              ? 'Table unavailable'
+                              : !myTurn
+                                ? 'Waiting for your turn'
+                                : card
+                                  ? take.length
+                                    ? 'Capture cards'
+                                    : 'Play card'
+                                  : 'Select a card'}
                         </Button>
                         {game.scores[team(game.seat)] +
                           count(game.captured[team(game.seat)], game.surs[team(game.seat)]).total >=

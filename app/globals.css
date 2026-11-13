@@ -336,6 +336,21 @@ h2 {
   color: inherit;
   font-size: 1.5rem;
 }
+.error-fallback {
+  margin: 16px auto;
+  max-width: 660px;
+  background: #653526;
+  color: #fff2e8;
+  padding: 18px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.error-fallback button {
+  white-space: nowrap;
+}
 .connection {
   background: #685522;
 }

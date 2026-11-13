@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 
 type State = { failed: boolean };
 
@@ -18,11 +19,11 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
     if (!this.state.failed) return this.props.children;
     return (
       <main className="app-shell">
-        <div className="error" role="alert">
-          Something went wrong on this page.
-          <button type="button" onClick={() => location.reload()}>
+        <div className="error-fallback" role="alert">
+          <p>Something went wrong on this page.</p>
+          <Button type="button" variant="secondary" onClick={() => location.reload()}>
             Reload
-          </button>
+          </Button>
         </div>
       </main>
     );

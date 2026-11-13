@@ -23,7 +23,12 @@ test('a render error shows the fallback with a Reload button, not a blank page',
   await expect(page.getByText('Something went wrong on this page.')).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByRole('button', { name: 'Reload' })).toBeVisible();
+  const reload = page.getByRole('button', { name: 'Reload' });
+  await expect(reload).toBeVisible();
+  // The label stays on one line, also on a phone.
+  await page.setViewportSize({ width: 390, height: 664 });
+  const box = await reload.boundingBox();
+  expect(box!.height).toBeLessThan(60);
   expect(errors.join('\n')).toContain('Pasur render error');
   await page.unroute('**/api/game?*');
   await page.getByRole('button', { name: 'Reload' }).click();
