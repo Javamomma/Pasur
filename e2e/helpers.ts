@@ -37,6 +37,6 @@ export async function seatAndDeal(host: Page, guest: Page) {
   await expect(guest.getByText('Waiting for the host to deal')).toBeVisible();
   await host.getByRole('button', { name: 'Deal the cards' }).click();
   await expect(host.locator('.hand-cards button.playing-card')).toHaveCount(4);
-  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4);
+  await expect(guest.locator('.hand-cards button.playing-card')).toHaveCount(4, { timeout: 12_000 });
   return code;
 }

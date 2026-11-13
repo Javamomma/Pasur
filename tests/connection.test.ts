@@ -193,3 +193,41 @@ test('a slow poll is abandoned after the limit and reported as failed', async ()
   const r = await request(hang, '/api/game?code=A', {}, { ...fast, requestTimeoutMs: 20 });
   assert.equal(r.kind, 'failed');
 });
+
+test('classifyFailure: honest messages, and which failures stop polling', async () => {
+  const { classifyFailure } = await import('../lib/connection.ts');
+  const reply = (status: number, data: unknown) => ({
+    kind: 'reply' as const,
+    ok: status < 400,
+    status,
+    data,
+  });
+  const interrupted = { message: 'Connection interrupted. Reconnecting…', stopPolling: false };
+  assert.deepEqual(classifyFailure(reply(403, { error: 'Nope' })), {
+    message: 'This browser is no longer seated at this table.',
+    stopPolling: true,
+    gone: true,
+  });
+  assert.deepEqual(classifyFailure(reply(404, { error: 'Nope' })), {
+    message: 'This table no longer exists.',
+    stopPolling: true,
+    gone: true,
+  });
+  assert.deepEqual(classifyFailure(reply(409, { error: 'The table changed.' })), {
+    message: 'The table changed.',
+    stopPolling: true,
+    gone: false,
+  });
+  assert.deepEqual(classifyFailure(reply(409, {})), {
+    message: 'Please try again.',
+    stopPolling: true,
+    gone: false,
+  });
+  for (const r of [
+    reply(500, { error: 'boom' }),
+    reply(503, null),
+    reply(200, null),
+    { kind: 'failed' as const },
+  ])
+    assert.deepEqual(classifyFailure(r), { ...interrupted, gone: false });
+});

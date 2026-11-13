@@ -102,6 +102,10 @@ export function createPoller(o: {
     noteChange() {
       lastChange = now();
     },
+    /** The phase changed: restart the wait so a slow lobby delay does not outlast a fast playing one. */
+    reschedule() {
+      if (running && !paused && !stopped && !inFlight) schedule();
+    },
     isPaused: () => paused,
     /** Leave the paused state: poll right away, reset the idle clock, keep the schedule going. */
     resume() {
@@ -180,4 +184,35 @@ export async function submitMove(
   hooks.onUncertain?.();
   await hooks.check();
   return { outcome: 'uncertain' };
+}
+
+/**
+ * Turn a failed request into what to tell the player. 403 / 404 are final ("gone"); network
+ * errors, timeouts, 5xx and bodies that are not JSON are temporary; any other 4xx shows the
+ * server's own message. `stopPolling` is true for everything that retrying cannot fix.
+ */
+export function classifyFailure(reply: Reply): {
+  message: string;
+  stopPolling: boolean;
+  gone: boolean;
+} {
+  const interrupted = {
+    message: 'Connection interrupted. Reconnecting…',
+    stopPolling: false,
+    gone: false,
+  };
+  if (reply.kind === 'failed') return interrupted;
+  if (reply.status === 403)
+    return {
+      message: 'This browser is no longer seated at this table.',
+      stopPolling: true,
+      gone: true,
+    };
+  if (reply.status === 404)
+    return { message: 'This table no longer exists.', stopPolling: true, gone: true };
+  if (reply.status >= 500 || reply.data === null || typeof reply.data !== 'object')
+    return interrupted;
+  if (reply.status >= 400)
+    return { message: reply.data.error || 'Please try again.', stopPolling: true, gone: false };
+  return interrupted;
 }

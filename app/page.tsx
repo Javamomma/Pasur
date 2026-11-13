@@ -11,7 +11,14 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { acceptReply, createPoller, request, submitMove, TIMING } from '@/lib/connection';
+import {
+  acceptReply,
+  classifyFailure,
+  createPoller,
+  request,
+  submitMove,
+  TIMING,
+} from '@/lib/connection';
 import { label, rank, options, team, count, suitSymbols, type GameView } from '@/lib/pasur';
 import {
   Share2,
@@ -78,7 +85,8 @@ export default function Home() {
     [copied, setCopied] = useState(false),
     [lastCode, setLastCode] = useState(''),
     [restoring, setRestoring] = useState(false),
-    [paused, setPaused] = useState(false);
+    [paused, setPaused] = useState(false),
+    [lost, setLost] = useState<{ message: string; gone: boolean } | null>(null);
   const pollerRef = useRef<ReturnType<typeof createPoller> | null>(null);
   const current = useRef<GameView | null>(null);
   current.current = game;
@@ -101,6 +109,11 @@ export default function Home() {
     setLastCode(g.code);
     history.replaceState(null, '', '?table=' + g.code);
     return true;
+  }
+  // The server says this table is gone for this browser: don't offer it again.
+  function forgetTable(c: string) {
+    if (localStorage.getItem('pasur-last-table') === c) localStorage.removeItem('pasur-last-table');
+    setLastCode((l) => (l === c ? '' : l));
   }
   const getTable = (c: string) =>
     request(fetch, '/api/game?code=' + encodeURIComponent(c), { cache: 'no-store' }, TIMING);
@@ -139,7 +152,8 @@ export default function Home() {
             else setError(UNSURE_NO_TABLE);
           },
           check: async () => {
-            await pollerRef.current?.kick();
+            // Keep the notice readable for a moment even when the check is instant.
+            await Promise.all([pollerRef.current?.kick(), new Promise((r) => setTimeout(r, 2000))]);
             setNotice((n) => (n === UNSURE ? '' : n));
           },
         },
@@ -196,10 +210,15 @@ export default function Home() {
         const r = await getTable(game.code);
         if (stopped) return;
         if (r.kind === 'reply' && r.ok) {
-          setNotice('');
+          setNotice((n) => (n === UNSURE ? n : ''));
           setGame((old) => (acceptReply(old, r.data, { switchTable: false }) ? r.data : old));
         } else {
-          setNotice('Connection interrupted. Reconnecting…');
+          const f = classifyFailure(r);
+          if (!f.stopPolling) return setNotice(f.message);
+          setNotice('');
+          setLost({ message: f.message, gone: f.gone });
+          if (f.gone) forgetTable(game.code);
+          return 'stop';
         }
       },
     });
@@ -218,6 +237,7 @@ export default function Home() {
       poller.stop();
       pollerRef.current = null;
       setPaused(false);
+      setLost(null);
       window.removeEventListener('online', wake);
       document.removeEventListener('visibilitychange', onVisible);
       document.removeEventListener('click', wake, true);
@@ -226,6 +246,9 @@ export default function Home() {
   useEffect(() => {
     pollerRef.current?.noteChange();
   }, [game?.revision]);
+  useEffect(() => {
+    pollerRef.current?.reschedule();
+  }, [game?.phase]);
   useEffect(() => {
     setCard('');
     setTake([]);
@@ -315,16 +338,17 @@ export default function Home() {
     const r = await getTable(knownCode);
     if (isLatest(gen)) {
       if (r.kind === 'reply' && r.ok) accept(r.data as GameView, true);
-      else if (r.kind === 'reply' && (r.status === 403 || r.status === 404)) {
-        setError(r.data?.error || 'This table is not available.');
-        localStorage.removeItem('pasur-last-table');
-        setLastCode('');
-      } else setError('Connection interrupted. Try again.');
+      else {
+        const f = classifyFailure(r);
+        if (f.gone) forgetTable(knownCode);
+        setError(f.stopPolling ? f.message : 'Connection interrupted. Try again.');
+      }
       setRestoring(false);
     }
   }
   function goHome() {
     beginNav();
+    if (lost?.gone) setGame(null);
     setScreen('home');
     setError('');
     history.replaceState(null, '', '/');
@@ -399,7 +423,15 @@ export default function Home() {
           Paused while nobody is playing. Tap to reconnect.
         </button>
       )}
-      {!paused && notice && screen === 'table' && (
+      {lost && screen === 'table' && (
+        <div className="connection" role="alert">
+          {lost.message}
+          <Button variant="secondary" onClick={goHome}>
+            Back to the home screen
+          </Button>
+        </div>
+      )}
+      {!paused && !lost && notice && screen === 'table' && (
         <div className="connection" role="status">
           {notice}
         </div>
