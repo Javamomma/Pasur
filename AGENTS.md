@@ -133,4 +133,4 @@ These were the director's defaults, not Arshia's choices. Change them if Arshia 
 
 ## Base branch
 
-modernize/2026-11-12-unstick-table
+main
